@@ -72,23 +72,24 @@ with col_titulo:
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. FUNCIONES DE LECTURA DE ARCHIVOS CSV
+# 2. FUNCIONES DE LECTURA DE ARCHIVOS CSV (INTELIGENTES)
 # ==========================================
 
-# 1. Carga de Establecimientos desde ESTABLECIMIENTOS.csv
+# 1. Carga de Establecimientos (suscrito a singular y plural)
 def obtener_establecimientos():
-    archivos_posibles = ['ESTABLECIMIENTOS.csv', 'establecimientos.csv', 'Establecimientos.csv']
+    archivos_posibles = ['ESTABLECIMIENTO.csv', 'ESTABLECIMIENTOS.csv', 'establecimiento.csv', 'establecimientos.csv']
     for archivo in archivos_posibles:
         if os.path.exists(archivo):
             try:
                 try:
-                    df = pd.read_csv(archivo, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df = pd.read_csv(archivo, encoding='latin1')
+                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
+                except Exception:
+                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
 
                 col_eess = None
                 for c in df.columns:
-                    if str(c).strip().upper() in ['EESS', 'ESTABLECIMIENTO', 'CENTRO_DE_SALUD', 'NOMBRE']:
+                    c_clean = str(c).strip().upper()
+                    if c_clean in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTOS', 'CENTRO_DE_SALUD', 'NOMBRE']:
                         col_eess = c
                         break
                 if not col_eess:
@@ -116,15 +117,15 @@ def obtener_metas_csv():
         if os.path.exists(archivo):
             try:
                 try:
-                    df = pd.read_csv(archivo, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df = pd.read_csv(archivo, encoding='latin1')
+                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
+                except Exception:
+                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
 
                 col_eess = None
                 col_meta = None
                 for c in df.columns:
                     c_upper = str(c).strip().upper()
-                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'CENTRO_DE_SALUD']:
+                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTOS', 'CENTRO_DE_SALUD']:
                         col_eess = c
                     elif c_upper in ['META_CANES', 'META', 'DOSIS', 'CANES']:
                         col_meta = c
@@ -141,33 +142,35 @@ def obtener_metas_csv():
                 print(f"Error al leer {archivo}: {e}")
     return metas_dict
 
-# 3. Carga de Personal desde PERSONAL.csv (Columna NOMBRE)
+# 3. Carga de Personal desde PERSONAL.csv (Soporta NOMBRES / NOMBRE y punto y coma)
 def obtener_personal():
     archivos_posibles = ['PERSONAL.csv', 'personal.csv', 'Personal.csv']
     for archivo in archivos_posibles:
         if os.path.exists(archivo):
             try:
                 try:
-                    df_p = pd.read_csv(archivo, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df_p = pd.read_csv(archivo, encoding='latin1')
+                    df_p = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
+                except Exception:
+                    df_p = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
 
                 col_nombre = None
                 for c in df_p.columns:
-                    if str(c).strip().upper() in ['NOMBRE', 'NOMBRES', 'PERSONAL']:
+                    c_clean = str(c).strip().upper()
+                    if c_clean in ['NOMBRE', 'NOMBRES', 'PERSONAL', 'INTEGRANTE', 'INTEGRANTES']:
                         col_nombre = c
                         break
                 
-                if col_nombre:
-                    nombres = df_p[col_nombre].dropna().unique().tolist()
-                    lista_limpia = sorted([str(n).strip() for n in nombres if str(n).strip() != ''])
-                    if lista_limpia:
-                        return lista_limpia
+                if not col_nombre:
+                    col_nombre = df_p.columns[0]
+
+                nombres = df_p[col_nombre].dropna().unique().tolist()
+                lista_limpia = sorted([str(n).strip() for n in nombres if str(n).strip() != ''])
+                if lista_limpia:
+                    return lista_limpia
             except Exception as e:
                 print(f"Error al leer {archivo}: {e}")
                 
-    return ["Lic. Ethel", "Lic. Sara", "Lic. Amanda", "Tec. Angela", "Tec. Violeta", 
-            "Lic. Carlos Mendoza", "Lic. María Torres", "Tec. Juan Pérez", "Tec. Rosa Gómez"]
+    return ["Lic. Ethel", "Lic. Sara", "Lic. Amanda", "Tec. Angela", "Tec. Violeta"]
 
 # 4. Carga de Zonas desde ZONAS.csv
 def obtener_zonas():
@@ -176,13 +179,14 @@ def obtener_zonas():
         if os.path.exists(archivo):
             try:
                 try:
-                    df_z = pd.read_csv(archivo, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df_z = pd.read_csv(archivo, encoding='latin1')
+                    df_z = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
+                except Exception:
+                    df_z = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
 
                 col_zona = None
                 for c in df_z.columns:
-                    if str(c).strip().upper() in ['ZONAS', 'ZONA', 'LUGAR', 'SECTOR']:
+                    c_clean = str(c).strip().upper()
+                    if c_clean in ['ZONAS', 'ZONA', 'LUGAR', 'SECTOR']:
                         col_zona = c
                         break
                 if not col_zona:
@@ -455,8 +459,18 @@ if opcion == "📝 Registrar Avance Diario":
 # MÓDULO 2: DASHBOARD Y VACUNÓMETRO (DIRECTOR)
 # ==========================================
 elif opcion == "📊 Dashboard y Vacunómetro":
-    st.header("📊 Dashboard Analítico y Vacunómetro MINSA")
+    col_head_dash, col_btn_ref = st.columns([4, 1])
     
+    with col_head_dash:
+        st.header("📊 Dashboard Analítico y Vacunómetro MINSA")
+    
+    # BOTÓN DE REFRESH / ACTUALIZACIÓN EN TIEMPO REAL
+    with col_btn_ref:
+        st.write("") # Espaciador
+        if st.button("🔄 Actualizar Datos", type="primary", use_container_width=True, help="Haz clic para recargar los últimos avances y metas sin salir del sistema"):
+            st.cache_data.clear()
+            st.rerun()
+
     df = cargar_datos()
     df_metas_db = cargar_metas()
 
@@ -475,7 +489,7 @@ elif opcion == "📊 Dashboard y Vacunómetro":
     
     # Zonas y Turnos filtrados
     if not df.empty:
-        zonas_disponibles = sorted(df['zona'].unique().tolist())
+        zonas_disponibles = sorted(list(set(df['zona'].unique().tolist() + LISTA_ZONAS)))
         turnos_disponibles = df['turno'].unique().tolist()
     else:
         zonas_disponibles = LISTA_ZONAS
@@ -669,16 +683,16 @@ elif opcion == "🎯 Configuración Manual de Metas":
         file_metas = st.file_uploader("Subir archivo METAS.csv", type=["csv"])
         if file_metas is not None:
             try:
-                df_up = pd.read_csv(file_metas)
-                if 'eess' in df_up.columns and 'meta_canes' in df_up.columns:
-                    for _, row in df_up.iterrows():
-                        guardar_meta(str(row['eess']).strip(), int(row['meta_canes']))
-                    st.success("✅ Metas cargadas masivamente con éxito.")
-                    st.rerun()
-                else:
-                    st.error("El archivo CSV debe contener las columnas: 'eess' y 'meta_canes'")
+                df_up = pd.read_csv(file_metas, sep=None, engine='python')
+                col_e = [c for c in df_up.columns if str(c).strip().lower() in ['eess', 'establecimiento']][0]
+                col_m = [c for c in df_up.columns if str(c).strip().lower() in ['meta_canes', 'meta']][0]
+                
+                for _, row in df_up.iterrows():
+                    guardar_meta(str(row[col_e]).strip(), int(row[col_m]))
+                st.success("✅ Metas cargadas masivamente con éxito.")
+                st.rerun()
             except Exception as e:
-                st.error(f"Error al procesar el archivo: {e}")
+                st.error(f"Error al procesar el archivo CSV: {e}")
 
     with col_tabla:
         st.subheader("📋 Metas Configuradas Actuales")
