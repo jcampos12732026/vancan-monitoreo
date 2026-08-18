@@ -72,10 +72,76 @@ with col_titulo:
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. LECTURA DE ARCHIVOS CSV (PERSONAL, ZONAS Y METAS)
+# 2. FUNCIONES DE LECTURA DE ARCHIVOS CSV
 # ==========================================
 
-# Carga de Personal desde PERSONAL.csv (NOMBRE, DNI)
+# 1. Carga de Establecimientos desde ESTABLECIMIENTOS.csv
+def obtener_establecimientos():
+    archivos_posibles = ['ESTABLECIMIENTOS.csv', 'establecimientos.csv', 'Establecimientos.csv']
+    for archivo in archivos_posibles:
+        if os.path.exists(archivo):
+            try:
+                try:
+                    df = pd.read_csv(archivo, encoding='utf-8')
+                except UnicodeDecodeError:
+                    df = pd.read_csv(archivo, encoding='latin1')
+
+                col_eess = None
+                for c in df.columns:
+                    if str(c).strip().upper() in ['EESS', 'ESTABLECIMIENTO', 'CENTRO_DE_SALUD', 'NOMBRE']:
+                        col_eess = c
+                        break
+                if not col_eess:
+                    col_eess = df.columns[0]
+
+                lista = df[col_eess].dropna().unique().tolist()
+                lista_limpia = sorted([str(e).strip() for e in lista if str(e).strip() != ''])
+                if lista_limpia:
+                    return lista_limpia
+            except Exception as e:
+                print(f"Error al leer {archivo}: {e}")
+                
+    return ["C.S. César López Silva", "C.S. Ñaña", "C.S. Morón", "C.S. Chosica"]
+
+# 2. Carga de Metas amarradas al EESS desde METAS.csv
+def obtener_metas_csv():
+    metas_dict = {
+        "C.S. César López Silva": 1400,
+        "C.S. Ñaña": 2200,
+        "C.S. Morón": 2800,
+        "C.S. Chosica": 4000
+    }
+    archivos_posibles = ['METAS.csv', 'metas.csv', 'Metas.csv']
+    for archivo in archivos_posibles:
+        if os.path.exists(archivo):
+            try:
+                try:
+                    df = pd.read_csv(archivo, encoding='utf-8')
+                except UnicodeDecodeError:
+                    df = pd.read_csv(archivo, encoding='latin1')
+
+                col_eess = None
+                col_meta = None
+                for c in df.columns:
+                    c_upper = str(c).strip().upper()
+                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'CENTRO_DE_SALUD']:
+                        col_eess = c
+                    elif c_upper in ['META_CANES', 'META', 'DOSIS', 'CANES']:
+                        col_meta = c
+
+                if col_eess and col_meta:
+                    for _, row in df.iterrows():
+                        eess_nom = str(row[col_eess]).strip()
+                        try:
+                            meta_val = int(row[col_meta])
+                            metas_dict[eess_nom] = meta_val
+                        except ValueError:
+                            pass
+            except Exception as e:
+                print(f"Error al leer {archivo}: {e}")
+    return metas_dict
+
+# 3. Carga de Personal desde PERSONAL.csv (Columna NOMBRE)
 def obtener_personal():
     archivos_posibles = ['PERSONAL.csv', 'personal.csv', 'Personal.csv']
     for archivo in archivos_posibles:
@@ -101,9 +167,9 @@ def obtener_personal():
                 print(f"Error al leer {archivo}: {e}")
                 
     return ["Lic. Ethel", "Lic. Sara", "Lic. Amanda", "Tec. Angela", "Tec. Violeta", 
-            "Lic. Carlos Mendoza", "Lic. María Torres", "Tec. Juan Pérez", "Tec. Rosa Gómez", "Lic. Ana Ramos"]
+            "Lic. Carlos Mendoza", "Lic. María Torres", "Tec. Juan Pérez", "Tec. Rosa Gómez"]
 
-# Carga de Zonas desde ZONAS.csv
+# 4. Carga de Zonas desde ZONAS.csv
 def obtener_zonas():
     archivos_posibles = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv']
     for archivo in archivos_posibles:
@@ -119,7 +185,6 @@ def obtener_zonas():
                     if str(c).strip().upper() in ['ZONAS', 'ZONA', 'LUGAR', 'SECTOR']:
                         col_zona = c
                         break
-                
                 if not col_zona:
                     col_zona = df_z.columns[0]
 
@@ -132,50 +197,11 @@ def obtener_zonas():
                 
     return ["Sector Central", "Ñaña", "Huascata", "Los Cedros", "Santa Inés", "Ocharán", "Carapongo"]
 
-# Carga de Metas desde METAS.csv
-METAS_PREDETERMINADAS_DEFAULT = {
-    "C.S. César López Silva": 1400,
-    "C.S. Ñaña": 2200,
-    "C.S. Morón": 2800,
-    "C.S. Chosica": 4000
-}
-
-def obtener_metas_csv():
-    metas_dict = METAS_PREDETERMINADAS_DEFAULT.copy()
-    archivos_posibles = ['METAS.csv', 'metas.csv', 'Metas.csv']
-    for archivo in archivos_posibles:
-        if os.path.exists(archivo):
-            try:
-                try:
-                    df_m = pd.read_csv(archivo, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df_m = pd.read_csv(archivo, encoding='latin1')
-
-                col_eess = None
-                col_meta = None
-                for c in df_m.columns:
-                    c_upper = str(c).strip().upper()
-                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTO_SALUD']:
-                        col_eess = c
-                    elif c_upper in ['META_CANES', 'META', 'DOSIS', 'CANES']:
-                        col_meta = c
-
-                if col_eess and col_meta:
-                    for _, row in df_m.iterrows():
-                        eess_nom = str(row[col_eess]).strip()
-                        try:
-                            meta_val = int(row[col_meta])
-                            metas_dict[eess_nom] = meta_val
-                        except ValueError:
-                            pass
-            except Exception as e:
-                print(f"Error al leer {archivo}: {e}")
-    return metas_dict
-
+# Carga global de catálogos
+LISTA_EESS = obtener_establecimientos()
 METAS_PREDETERMINADAS = obtener_metas_csv()
 LISTA_PERSONAL = obtener_personal()
 LISTA_ZONAS = obtener_zonas()
-LISTA_EESS = list(METAS_PREDETERMINADAS.keys())
 LISTA_TURNOS = ["Mañana", "Tarde"]
 LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 11)]
 
@@ -211,11 +237,9 @@ def init_db():
         )
     ''')
     
-    # Pre-alimentación de metas iniciales
-    c.execute("SELECT COUNT(*) FROM metas")
-    if c.fetchone()[0] == 0:
-        for eess_nombre, meta_valor in METAS_PREDETERMINADAS.items():
-            c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_nombre, meta_valor))
+    # Sincronización automática de metas desde METAS.csv
+    for eess_nombre, meta_valor in METAS_PREDETERMINADAS.items():
+        c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_nombre, meta_valor))
             
     conn.commit()
     conn.close()
@@ -320,8 +344,8 @@ if not st.session_state["logged_in"]:
 # ==========================================
 st.sidebar.markdown(f"**Usuario:** `{st.session_state['username']}`")
 st.sidebar.markdown(f"**Rol:** `{st.session_state['user_role']}`")
+st.sidebar.markdown(f"**Establecimientos:** `{len(LISTA_EESS)}`")
 st.sidebar.markdown(f"**Personal Cargado:** `{len(LISTA_PERSONAL)}`")
-st.sidebar.markdown(f"**Zonas Cargadas:** `{len(LISTA_ZONAS)}`")
 st.sidebar.markdown("---")
 
 opciones = []
@@ -354,12 +378,12 @@ if opcion == "📝 Registrar Avance Diario":
             turno = st.selectbox("Turno", LISTA_TURNOS)
             brigada = st.selectbox("Seleccionar Brigada", LISTA_BRIGADAS)
             
-            # RESTRICCIÓN DE MÁXIMO 2 SELECCIONES POR BRIGADA
+            # RESTRICCIÓN DE MÁXIMO 2 SELECCIONES POR BRIGADA (DESDE PERSONAL.csv)
             integrantes_sel = st.multiselect(
                 "Integrantes de la Brigada (Máximo 2 personas)",
                 options=LISTA_PERSONAL,
                 max_selections=2,
-                help="Selecciona hasta 2 personas para dividir en partes iguales la vacunación"
+                help="Selecciona hasta 2 personas para dividir la producción en partes iguales"
             )
         
         with col2:
@@ -428,88 +452,97 @@ if opcion == "📝 Registrar Avance Diario":
                         st.rerun()
 
 # ==========================================
-# MÓDULO 2: DASHBOARD Y VACUNÓMETRO
+# MÓDULO 2: DASHBOARD Y VACUNÓMETRO (DIRECTOR)
 # ==========================================
 elif opcion == "📊 Dashboard y Vacunómetro":
     st.header("📊 Dashboard Analítico y Vacunómetro MINSA")
     
     df = cargar_datos()
-    df_metas = cargar_metas()
+    df_metas_db = cargar_metas()
 
-    if df.empty:
-        st.info("Aún no hay registros de vacunación en el sistema.")
-    else:
-        st.subheader("🔍 Filtros de Visualización")
-        f1, f2, f3 = st.columns(3)
-        
-        eess_disponibles = df['eess'].unique().tolist()
+    # Construir mapa actualizado de metas amarrando METAS.csv y la BD
+    mapa_metas = METAS_PREDETERMINADAS.copy()
+    if not df_metas_db.empty:
+        for _, r in df_metas_db.iterrows():
+            mapa_metas[str(r['eess']).strip()] = int(r['meta_canes'])
+
+    st.subheader("🔍 Filtros de Visualización")
+    f1, f2, f3 = st.columns(3)
+    
+    # Filtro de EESS dinámico
+    eess_disponibles = LISTA_EESS
+    eess_sel = f1.multiselect("Establecimiento de Salud", eess_disponibles, default=eess_disponibles)
+    
+    # Zonas y Turnos filtrados
+    if not df.empty:
         zonas_disponibles = sorted(df['zona'].unique().tolist())
         turnos_disponibles = df['turno'].unique().tolist()
+    else:
+        zonas_disponibles = LISTA_ZONAS
+        turnos_disponibles = LISTA_TURNOS
 
-        eess_sel = f1.multiselect("Establecimiento de Salud", eess_disponibles, default=eess_disponibles)
-        zona_sel = f2.multiselect("Zona de Intervención", zonas_disponibles, default=zonas_disponibles)
-        turno_sel = f3.multiselect("Turno", turnos_disponibles, default=turnos_disponibles)
+    zona_sel = f2.multiselect("Zona de Intervención", zonas_disponibles, default=zonas_disponibles)
+    turno_sel = f3.multiselect("Turno", turnos_disponibles, default=turnos_disponibles)
 
+    # Filtrar Datos de Avance
+    if not df.empty:
         df_f = df[(df['eess'].isin(eess_sel)) & (df['zona'].isin(zona_sel)) & (df['turno'].isin(turno_sel))]
-
         total_vacunados = pd.to_numeric(df_f['dosis'], errors='coerce').fillna(0).sum()
+    else:
+        df_f = pd.DataFrame()
+        total_vacunados = 0
 
-        if not df_metas.empty:
-            df_metas_filtradas = df_metas[df_metas['eess'].isin(eess_sel)]
-            meta_filtrada = df_metas_filtradas['meta_canes'].sum()
-        else:
-            meta_filtrada = 0
+    # CÁLCULO DE META PROGRAMADA AMARRADA AL EESS
+    meta_filtrada = sum([mapa_metas.get(e, 1000) for e in eess_sel])
+    pct_avance = (total_vacunados / meta_filtrada * 100) if meta_filtrada > 0 else 0.0
 
-        if meta_filtrada == 0:
-            meta_filtrada = sum([METAS_PREDETERMINADAS.get(e, 1000) for e in eess_sel])
+    st.markdown("---")
 
-        pct_avance = (total_vacunados / meta_filtrada * 100) if meta_filtrada > 0 else 0.0
+    c_vac1, c_vac2 = st.columns([1, 2])
+    
+    with c_vac1:
+        st.markdown("### 💉 Vacunómetro de Avance")
+        st.metric("Total Vacunados", f"{int(total_vacunados):,} canes")
+        st.metric("Meta Programada Total", f"{int(meta_filtrada):,} canes")
+        st.metric("% Cobertura Alcanzado", f"{pct_avance:.1f} %")
 
-        st.markdown("---")
-
-        c_vac1, c_vac2 = st.columns([1, 2])
-        
-        with c_vac1:
-            st.markdown("### 💉 Vacunómetro de Avance")
-            st.metric("Total Vacunados", f"{int(total_vacunados):,} canes")
-            st.metric("Meta Programada Total", f"{int(meta_filtrada):,} canes")
-            st.metric("% Cobertura Alcanzado", f"{pct_avance:.1f} %")
-
-        with c_vac2:
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number+delta",
-                value = total_vacunados,
-                domain = {'x': [0, 1], 'y': [0, 1]},
-                title = {'text': "Avance vs Meta Programada", 'font': {'size': 18}},
-                delta = {'reference': meta_filtrada, 'increasing': {'color': "green"}},
-                gauge = {
-                    'axis': {'range': [None, max(meta_filtrada, total_vacunados if total_vacunados>0 else 100)]},
-                    'bar': {'color': "#003366"},
-                    'steps': [
-                        {'range': [0, meta_filtrada*0.5], 'color': "#FADBD8"},
-                        {'range': [meta_filtrada*0.5, meta_filtrada*0.85], 'color': "#FCF3CF"},
-                        {'range': [meta_filtrada*0.85, meta_filtrada], 'color': "#D4EFDF"}
-                    ],
-                    'threshold': {
-                        'line': {'color': "red", 'width': 4},
-                        'thickness': 0.75,
-                        'value': meta_filtrada
-                    }
+    with c_vac2:
+        fig_gauge = go.Figure(go.Indicator(
+            mode = "gauge+number+delta",
+            value = total_vacunados,
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': "Avance vs Meta Programada", 'font': {'size': 18}},
+            delta = {'reference': meta_filtrada, 'increasing': {'color': "green"}},
+            gauge = {
+                'axis': {'range': [None, max(meta_filtrada, total_vacunados if total_vacunados>0 else 100)]},
+                'bar': {'color': "#003366"},
+                'steps': [
+                    {'range': [0, meta_filtrada*0.5], 'color': "#FADBD8"},
+                    {'range': [meta_filtrada*0.5, meta_filtrada*0.85], 'color': "#FCF3CF"},
+                    {'range': [meta_filtrada*0.85, meta_filtrada], 'color': "#D4EFDF"}
+                ],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': meta_filtrada
                 }
-            ))
-            fig_gauge.update_layout(height=280, margin=dict(l=20, r=20, t=30, b=20))
-            st.plotly_chart(fig_gauge, use_container_width=True)
+            }
+        ))
+        fig_gauge.update_layout(height=280, margin=dict(l=20, r=20, t=30, b=20))
+        st.plotly_chart(fig_gauge, use_container_width=True)
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # CÁLCULO DE PRODUCCIÓN POR PERSONA (DIVISIÓN EN PARTES IGUALES POR BRIGADA)
+    # SECCIÓN DE RANKING DE PRODUCCIÓN POR PERSONAL (50/50 POR INTEGRANTE)
+    st.subheader("🏆 Ranking de Producción por Personal (Producción Acumulada)")
+    st.caption("Las dosis reportadas por cada brigada se dividen en partes iguales entre sus integrantes para el cálculo acumulado individual.")
+
+    if not df_f.empty:
         prod_por_persona = {}
-        
         for _, row in df_f.iterrows():
             dosis_total = float(row['dosis'])
             raw_integrantes = str(row['integrantes'])
             
-            # Limpieza y separación de integrantes
             lista_int = [i.strip() for i in raw_integrantes.split(',') if i.strip() != '']
             cant_int = len(lista_int)
             
@@ -517,10 +550,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
                 dosis_individual = dosis_total / cant_int
                 for persona in lista_int:
                     prod_por_persona[persona] = prod_por_persona.get(persona, 0.0) + dosis_individual
-
-        # SECCIÓN DE RANKING DE PRODUCCIÓN ACUMULADA POR PERSONAL
-        st.subheader("🏆 Ranking de Producción por Personal (Producción Acumulada)")
-        st.caption("Las dosis de la brigada son divididas en partes iguales (50/50) entre sus integrantes para calcular la producción individual de cada vacunador.")
 
         if prod_por_persona:
             df_prod = pd.DataFrame(list(prod_por_persona.items()), columns=['Personal', 'Dosis Acumuladas'])
@@ -535,26 +564,29 @@ elif opcion == "📊 Dashboard y Vacunómetro":
                 text='Dosis Acumuladas',
                 color='Dosis Acumuladas',
                 color_continuous_scale='Blues',
-                title="Producción Individual Acumulada por Integrante de Salud"
+                title="Producción Individual Acumulada por Vacunador"
             )
             fig_prod.update_layout(height=max(350, len(df_prod)*30), showlegend=False)
             st.plotly_chart(fig_prod, use_container_width=True)
         else:
-            st.info("No hay datos de integrantes para generar el ranking de producción.")
+            st.info("No se registraron integrantes para calcular la producción acumulada.")
+    else:
+        st.info("No hay registros que coincidan con los filtros seleccionados.")
 
-        st.markdown("---")
+    st.markdown("---")
 
+    if not df_f.empty:
         st.subheader("📈 Avance Diario y Progreso Acumulado de Vacunación")
         
-        df_f['fecha'] = pd.to_datetime(df_f['fecha'])
-        df_diario = df_f.groupby('fecha')['dosis'].sum().reset_index().sort_values('fecha')
+        df_f['fecha_dt'] = pd.to_datetime(df_f['fecha'])
+        df_diario = df_f.groupby('fecha_dt')['dosis'].sum().reset_index().sort_values('fecha_dt')
         df_diario['acumulado'] = df_diario['dosis'].cumsum()
 
         fig_comb = make_subplots(specs=[[{"secondary_y": True}]])
 
         fig_comb.add_trace(
             go.Bar(
-                x=df_diario['fecha'].dt.strftime('%Y-%m-%d'),
+                x=df_diario['fecha_dt'].dt.strftime('%Y-%m-%d'),
                 y=df_diario['dosis'],
                 name="Dosis Diarias (Barras)",
                 marker_color='#003366',
@@ -566,7 +598,7 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         fig_comb.add_trace(
             go.Scatter(
-                x=df_diario['fecha'].dt.strftime('%Y-%m-%d'),
+                x=df_diario['fecha_dt'].dt.strftime('%Y-%m-%d'),
                 y=df_diario['acumulado'],
                 name="Progreso Acumulado (Línea)",
                 mode='lines+markers+text',
@@ -676,7 +708,7 @@ elif opcion == "🕵️ Auditoría y Gestión de Datos":
     )
 
 # ==========================================
-# PIE DE PÁGINA (CHERRY MINSA)
+# PIE DE PÁGINA
 # ==========================================
 st.markdown("""
     <div class="footer-text">
