@@ -1,221 +1,50 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
+import os
+import re
+from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import sqlite3
-from datetime import datetime
-import os
 
 # ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS MINSA
+# CONFIGURACIÓN INICIAL DE LA PÁGINA
 # ==========================================
 st.set_page_config(
-    page_title="Sistema VANCAN - Monitoreo MINSA",
-    page_icon="🐕",
+    page_title="Sistema VANCAN - MINSA",
+    page_icon="💉",
     layout="wide"
 )
 
-# Estilos CSS con colores institucionales MINSA
-st.markdown("""
-    <style>
-    .main-header {
-        background-color: #003366;
-        color: white;
-        padding: 15px;
-        text-align: center;
-        border-radius: 8px;
-        margin-bottom: 20px;
-    }
-    .footer-text {
-        text-align: center;
-        color: #555;
-        font-weight: bold;
-        padding: 15px;
-        margin-top: 30px;
-        border-top: 2px solid #003366;
-        font-size: 0.9em;
-    }
-    .stButton>button {
-        background-color: #003366;
-        color: white;
-        border-radius: 5px;
-    }
-    .stButton>button:hover {
-        background-color: #D91023;
-        color: white;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Encabezado con soporte para Logo Institucional
-col_logo, col_titulo = st.columns([1, 4])
-
-with col_logo:
-    logo_path = None
-    for ext in ['logo.png', 'logo.jpg', 'logo.jpeg', 'LOGO.PNG', 'LOGO.JPG']:
-        if os.path.exists(ext):
-            logo_path = ext
-            break
-    
-    if logo_path:
-        st.image(logo_path, use_container_width=True)
-    else:
-        st.markdown("🏛️ **MINSA**")
-
-with col_titulo:
-    st.markdown("""
-        <div class="main-header">
-            <h2>MINISTERIO DE SALUD DEL PERÚ - VANCAN</h2>
-            <h4>Sistema de Monitoreo y Control de Vacunación Canina</h4>
-        </div>
-    """, unsafe_allow_html=True)
-
-# ==========================================
-# 2. FUNCIONES DE LECTURA DE ARCHIVOS CSV (INTELIGENTES)
-# ==========================================
-
-# 1. Carga de Establecimientos (suscrito a singular y plural)
-def obtener_establecimientos():
-    archivos_posibles = ['ESTABLECIMIENTO.csv', 'ESTABLECIMIENTOS.csv', 'establecimiento.csv', 'establecimientos.csv']
-    for archivo in archivos_posibles:
-        if os.path.exists(archivo):
-            try:
-                try:
-                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
-                except Exception:
-                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
-
-                col_eess = None
-                for c in df.columns:
-                    c_clean = str(c).strip().upper()
-                    if c_clean in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTOS', 'CENTRO_DE_SALUD', 'NOMBRE']:
-                        col_eess = c
-                        break
-                if not col_eess:
-                    col_eess = df.columns[0]
-
-                lista = df[col_eess].dropna().unique().tolist()
-                lista_limpia = sorted([str(e).strip() for e in lista if str(e).strip() != ''])
-                if lista_limpia:
-                    return lista_limpia
-            except Exception as e:
-                print(f"Error al leer {archivo}: {e}")
-                
-    return ["C.S. César López Silva", "C.S. Ñaña", "C.S. Morón", "C.S. Chosica"]
-
-# 2. Carga de Metas amarradas al EESS desde METAS.csv
-def obtener_metas_csv():
-    metas_dict = {
-        "C.S. César López Silva": 1400,
-        "C.S. Ñaña": 2200,
-        "C.S. Morón": 2800,
-        "C.S. Chosica": 4000
-    }
-    archivos_posibles = ['METAS.csv', 'metas.csv', 'Metas.csv']
-    for archivo in archivos_posibles:
-        if os.path.exists(archivo):
-            try:
-                try:
-                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
-                except Exception:
-                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
-
-                col_eess = None
-                col_meta = None
-                for c in df.columns:
-                    c_upper = str(c).strip().upper()
-                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTOS', 'CENTRO_DE_SALUD']:
-                        col_eess = c
-                    elif c_upper in ['META_CANES', 'META', 'DOSIS', 'CANES']:
-                        col_meta = c
-
-                if col_eess and col_meta:
-                    for _, row in df.iterrows():
-                        eess_nom = str(row[col_eess]).strip()
-                        try:
-                            meta_val = int(row[col_meta])
-                            metas_dict[eess_nom] = meta_val
-                        except ValueError:
-                            pass
-            except Exception as e:
-                print(f"Error al leer {archivo}: {e}")
-    return metas_dict
-
-# 3. Carga de Personal desde PERSONAL.csv (Soporta NOMBRES / NOMBRE y punto y coma)
-def obtener_personal():
-    archivos_posibles = ['PERSONAL.csv', 'personal.csv', 'Personal.csv']
-    for archivo in archivos_posibles:
-        if os.path.exists(archivo):
-            try:
-                try:
-                    df_p = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
-                except Exception:
-                    df_p = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
-
-                col_nombre = None
-                for c in df_p.columns:
-                    c_clean = str(c).strip().upper()
-                    if c_clean in ['NOMBRE', 'NOMBRES', 'PERSONAL', 'INTEGRANTE', 'INTEGRANTES']:
-                        col_nombre = c
-                        break
-                
-                if not col_nombre:
-                    col_nombre = df_p.columns[0]
-
-                nombres = df_p[col_nombre].dropna().unique().tolist()
-                lista_limpia = sorted([str(n).strip() for n in nombres if str(n).strip() != ''])
-                if lista_limpia:
-                    return lista_limpia
-            except Exception as e:
-                print(f"Error al leer {archivo}: {e}")
-                
-    return ["Lic. Ethel", "Lic. Sara", "Lic. Amanda", "Tec. Angela", "Tec. Violeta"]
-
-# 4. Carga de Zonas desde ZONAS.csv
-def obtener_zonas():
-    archivos_posibles = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv']
-    for archivo in archivos_posibles:
-        if os.path.exists(archivo):
-            try:
-                try:
-                    df_z = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
-                except Exception:
-                    df_z = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
-
-                col_zona = None
-                for c in df_z.columns:
-                    c_clean = str(c).strip().upper()
-                    if c_clean in ['ZONAS', 'ZONA', 'LUGAR', 'SECTOR']:
-                        col_zona = c
-                        break
-                if not col_zona:
-                    col_zona = df_z.columns[0]
-
-                zonas = df_z[col_zona].dropna().unique().tolist()
-                lista_limpia = sorted([str(z).strip() for z in zonas if str(z).strip() != ''])
-                if lista_limpia:
-                    return lista_limpia
-            except Exception as e:
-                print(f"Error al leer {archivo}: {e}")
-                
-    return ["Sector Central", "Ñaña", "Huascata", "Los Cedros", "Santa Inés", "Ocharán", "Carapongo"]
-
-# Carga global de catálogos
-LISTA_EESS = obtener_establecimientos()
-METAS_PREDETERMINADAS = obtener_metas_csv()
-LISTA_PERSONAL = obtener_personal()
-LISTA_ZONAS = obtener_zonas()
+# LISTAS BASE DE OPCIONES (Cargadas de CSVs o Fallbacks)
+LISTA_EESS = ["C.S. CESAR LOEPZ SILVA", "C.S. NAÑA", "C.S. MORON", "C.S. CHOSICA"]
+LISTA_ZONAS = [
+    "ROBLES", "ROCAS", "ROSALEDA", "ROSARIO", "ROSAS", 
+    "SAN BARTOLOME", "SAN JOSE", "SANTA INES", "SANTA INES BAJO", 
+    "SARA", "SAUCES", "SOL", "TACONES", "TERRA"
+]
 LISTA_TURNOS = ["Mañana", "Tarde"]
-LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 11)]
+LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 21)]
 
 # ==========================================
-# 3. BASE DE DATOS E INICIALIZACIÓN
+# FUNCIONES AUXILIARES DE NORMALIZACIÓN Y BASE DE DATOS
 # ==========================================
+def normalizar_texto(texto):
+    """Limpia tildes, caracteres especiales y convierte a mayúsculas para comparar fácilmente"""
+    if not texto:
+        return ""
+    texto = str(texto).upper().strip()
+    replacements = (("Á", "A"), ("É", "E"), ("Í", "I"), ("Ó", "O"), ("Ú", "U"))
+    for a, b in replacements:
+        texto = texto.replace(a, b)
+    texto = re.sub(r'[^A-Z0-9\s]', '', texto)
+    texto = re.sub(r'\s+', ' ', texto)
+    return texto
+
 def init_db():
+    """Inicializa la base de datos SQLite si no existe"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
-    
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,183 +62,207 @@ def init_db():
             equipo_ip TEXT
         )
     ''')
-
     c.execute('''
         CREATE TABLE IF NOT EXISTS metas (
-            eess TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            eess TEXT,
             meta_canes INTEGER
         )
     ''')
-    
-    # Sincronización automática de metas desde METAS.csv
-    for eess_nombre, meta_valor in METAS_PREDETERMINADAS.items():
-        c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_nombre, meta_valor))
-            
     conn.commit()
     conn.close()
 
 init_db()
 
-def guardar_registro(fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, obs, usuario, ip_equipo):
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    str_integrantes = ", ".join(integrantes) if isinstance(integrantes, list) else str(integrantes)
-    
-    c.execute('''
-        INSERT INTO avances (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (fecha, eess, turno, brigada, str_integrantes, responsable, zona, dosis, obs, usuario, fecha_hora_actual, ip_equipo))
-    conn.commit()
-    conn.close()
-
-def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, obs):
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''
-        UPDATE avances 
-        SET fecha=?, eess=?, turno=?, brigada=?, integrantes=?, responsable=?, zona=?, dosis=?, observaciones=?, fecha_hora_modificacion=?
-        WHERE id=?
-    ''', (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, obs, fecha_hora_actual, id_reg))
-    conn.commit()
-    conn.close()
-
-def eliminar_registro_db(id_reg):
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    c.execute('DELETE FROM avances WHERE id=?', (id_reg,))
-    conn.commit()
-    conn.close()
-
-def guardar_meta(eess, meta):
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)', (eess, meta))
-    conn.commit()
-    conn.close()
-
 def cargar_datos():
+    """Carga los datos guardados en la base de datos"""
     conn = sqlite3.connect('vancan_data.db')
-    df = pd.read_sql_query("SELECT * FROM avances", conn)
+    df = pd.read_sql_query("SELECT * FROM avances ORDER BY id ASC", conn)
     conn.close()
     return df
 
 def cargar_metas():
+    """Carga las metas registradas manualmente en la DB"""
     conn = sqlite3.connect('vancan_data.db')
-    df_m = pd.read_sql_query("SELECT * FROM metas", conn)
+    df = pd.read_sql_query("SELECT * FROM metas", conn)
     conn.close()
-    return df_m
+    return df
 
-def get_remote_ip():
-    try:
-        return st.context.headers.get("X-Forwarded-For", "Dispositivo Móvil / Web")
-    except Exception:
-        return "Web Client"
+def guardar_avance_db(fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro):
+    """Inserta un nuevo registro de avance"""
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ip_simulada = "10.14.14.2, 10.16"
+    c.execute('''
+        INSERT INTO avances (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (str(fecha), eess, turno, brigada, integrantes, responsable, zona, int(dosis), observaciones, usuario_registro, fecha_mod, ip_simulada))
+    conn.commit()
+    conn.close()
+
+def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones):
+    """Actualiza un registro editado en la tabla"""
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''
+        UPDATE avances 
+        SET fecha=?, eess=?, turno=?, brigada=?, integrantes=?, responsable=?, zona=?, dosis=?, observaciones=?, fecha_hora_modificacion=?
+        WHERE id=?
+    ''', (str(fecha), eess, turno, brigada, integrantes, responsable, zona, int(dosis), observaciones, fecha_mod, id_reg))
+    conn.commit()
+    conn.close()
+
+def reordenar_ids_db():
+    """Reordena correlativamente los IDs en la base de datos para no dejar huecos numéricos"""
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute("CREATE TABLE avances_seq AS SELECT * FROM avances ORDER BY id ASC;")
+    c.execute("DELETE FROM avances;")
+    c.execute("DELETE FROM sqlite_sequence WHERE name='avances';")
+    c.execute('''
+        INSERT INTO avances (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        SELECT fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip
+        FROM avances_seq ORDER BY id ASC;
+    ''')
+    c.execute("DROP TABLE avances_seq;")
+    conn.commit()
+    conn.close()
+
+def eliminar_registro_db(id_reg):
+    """Elimina un registro específico por ID y reordena numéricamente los restantes"""
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM avances WHERE id=?", (id_reg,))
+    conn.commit()
+    conn.close()
+    reordenar_ids_db()
+
+def vaciar_base_datos_db():
+    """Elimina TODOS los registros y reinicia el autoincremento de IDs a 1"""
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM avances")
+    c.execute("DELETE FROM sqlite_sequence WHERE name='avances'")
+    conn.commit()
+    conn.close()
+
+def obtener_metas_csv():
+    """Busca las metas desde archivos CSV locales con valores por defecto"""
+    metas_dict = {
+        "CS CESAR LOPEZ SILVA": 1400,
+        "CS NANA": 2200,
+        "CS MORON": 2800,
+        "CS CHOSICA": 4000
+    }
+    
+    archivos_posibles = ['METAS.csv', 'metas.csv', 'Metas.csv']
+    for archivo in archivos_posibles:
+        if os.path.exists(archivo):
+            try:
+                try:
+                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
+                except Exception:
+                    df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
+
+                col_eess = None
+                col_meta = None
+                for c in df.columns:
+                    c_upper = normalizar_texto(c)
+                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTOS', 'CENTRO DE SALUD']:
+                        col_eess = c
+                    elif c_upper in ['META CANES', 'META', 'DOSIS', 'CANES']:
+                        col_meta = c
+
+                if col_eess and col_meta:
+                    for _, row in df.iterrows():
+                        eess_nom = normalizar_texto(row[col_eess])
+                        try:
+                            meta_val = int(row[col_meta])
+                            metas_dict[eess_nom] = meta_val
+                        except ValueError:
+                            pass
+            except Exception as e:
+                print(f"Error al leer {archivo}: {e}")
+    return metas_dict
+
+def obtener_meta_establecimiento(eess_nombre, mapa_metas):
+    """Busca la meta de un EESS tolerando typos de escritura como 'LOEPZ' por 'LOPEZ'"""
+    eess_norm = normalizar_texto(eess_nombre)
+    
+    if eess_norm in mapa_metas:
+        return mapa_metas[eess_norm]
+    
+    if "CESAR" in eess_norm or "LOPEZ" in eess_norm or "LOEPZ" in eess_norm or "SILVA" in eess_norm:
+        return mapa_metas.get("CS CESAR LOPEZ SILVA", 1400)
+    elif "NANA" in eess_norm:
+        return mapa_metas.get("CS NANA", 2200)
+    elif "MORON" in eess_norm:
+        return mapa_metas.get("CS MORON", 2800)
+    elif "CHOSICA" in eess_norm:
+        return mapa_metas.get("CS CHOSICA", 4000)
+        
+    return 1000
 
 # ==========================================
-# 4. CONTROL DE ACCESO (LOGIN)
+# CONTROL DE SESIÓN Y AUTENTICACIÓN
 # ==========================================
-USUARIOS = {
-    "brigada": {"pass": "vancan2026", "rol": "Brigadista / Digitador"},
-    "coordinador": {"pass": "admin2026", "rol": "Coordinador / Editor"},
-    "director": {"pass": "salud2026", "rol": "Lector / Directivo"}
-}
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = True
+    st.session_state["user_role"] = "Brigadista / Digitador"
+    st.session_state["username"] = "brigada"
 
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-    st.session_state["user_role"] = None
-    st.session_state["username"] = None
+# BARRA LATERAL (Navegación y Perfil)
+st.sidebar.title("📌 Menú VANCAN MINSA")
+st.sidebar.info(f"**Usuario:** {st.session_state['username']}\n\n**Rol:** {st.session_state['user_role']}")
 
-if not st.session_state["logged_in"]:
-    st.subheader("🔒 Acceso al Sistema VANCAN")
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        user_input = st.text_input("Usuario").strip().lower()
-        pass_input = st.text_input("Contraseña", type="password")
-        if st.button("Ingresar", type="primary", use_container_width=True):
-            if user_input in USUARIOS and USUARIOS[user_input]["pass"] == pass_input:
-                st.session_state["logged_in"] = True
-                st.session_state["user_role"] = USUARIOS[user_input]["rol"]
-                st.session_state["username"] = user_input
-                st.rerun()
-            else:
-                st.error("Usuario o contraseña incorrecta")
+opciones_menu = [
+    "📝 Registrar Avance Diario",
+    "📊 Dashboard y Vacunómetro",
+    "⚙️ Configuración / Metas"
+]
 
-    st.markdown("""
-        <div class="footer-text">
-            Elaborado por Servicio de Enfermería del C.S. César López Silva / RIS Chaclacayo Chosica / DIRIS Lima Este / MINSA PERÚ
-        </div>
-    """, unsafe_allow_html=True)
-    st.stop()
+opcion = st.sidebar.radio("Ir a:", opciones_menu)
 
 # ==========================================
-# 5. NAVEGACIÓN Y SIDEBAR
-# ==========================================
-st.sidebar.markdown(f"**Usuario:** `{st.session_state['username']}`")
-st.sidebar.markdown(f"**Rol:** `{st.session_state['user_role']}`")
-st.sidebar.markdown(f"**Establecimientos:** `{len(LISTA_EESS)}`")
-st.sidebar.markdown(f"**Personal Cargado:** `{len(LISTA_PERSONAL)}`")
-st.sidebar.markdown("---")
-
-opciones = []
-if st.session_state["user_role"] in ["Brigadista / Digitador", "Coordinador / Editor"]:
-    opciones.append("📝 Registrar Avance Diario")
-if st.session_state["user_role"] in ["Coordinador / Editor", "Lector / Directivo"]:
-    opciones.append("📊 Dashboard y Vacunómetro")
-if st.session_state["user_role"] == "Coordinador / Editor":
-    opciones.append("🎯 Configuración Manual de Metas")
-    opciones.append("🕵️ Auditoría y Gestión de Datos")
-
-opciones.append("Cerrar Sesión")
-opcion = st.sidebar.radio("Menú Principal", opciones)
-
-if opcion == "Cerrar Sesión":
-    st.session_state["logged_in"] = False
-    st.rerun()
-
-# ==========================================
-# MÓDULO 1: REGISTRO DE AVANCE DIARIO
+# MÓDULO 1: REGISTRO Y GESTIÓN DE AVANCE
 # ==========================================
 if opcion == "📝 Registrar Avance Diario":
-    st.header("📝 Carga Diaria de Vacunación Canina")
-    
-    with st.form("form_carga", clear_on_submit=True):
-        col1, col2 = st.columns(2)
+    st.header("📝 Registro de Avances Diario de Vacunación Canina")
+    st.caption("Completa el formulario para ingresar la producción de las brigadas de campo.")
+
+    with st.form("form_registro", clear_on_submit=True):
+        col1, col2, col3 = st.columns(3)
         with col1:
-            fecha = st.date_input("Fecha de Intervención", datetime.now())
-            eess = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
-            turno = st.selectbox("Turno", LISTA_TURNOS)
-            brigada = st.selectbox("Seleccionar Brigada", LISTA_BRIGADAS)
-            
-            # RESTRICCIÓN DE MÁXIMO 2 SELECCIONES POR BRIGADA (DESDE PERSONAL.csv)
-            integrantes_sel = st.multiselect(
-                "Integrantes de la Brigada (Máximo 2 personas)",
-                options=LISTA_PERSONAL,
-                max_selections=2,
-                help="Selecciona hasta 2 personas para dividir la producción en partes iguales"
-            )
+            fecha_input = st.date_input("Fecha de Actividad", datetime.now())
+            eess_input = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
+            turno_input = st.selectbox("Turno", LISTA_TURNOS)
         
         with col2:
-            responsable = st.text_input("Responsable del Registro", placeholder="Ej. Lic. Carlos Mendoza")
-            zona = st.selectbox("Zona / Lugar", LISTA_ZONAS)
-            dosis = st.number_input("Canes Vacunados (Dosis)", min_value=0, step=1)
+            brigada_input = st.selectbox("Brigada", LISTA_BRIGADAS)
+            responsable_input = st.text_input("Responsable de Brigada", value="MARINA")
+            zona_input = st.selectbox("Zona / Lugar de Intervención", LISTA_ZONAS)
 
-        obs = st.text_area("Observaciones o Incidencias")
-        
-        btn_guardar = st.form_submit_button("🚀 Guardar Registro", type="primary", use_container_width=True)
+        with col3:
+            dosis_input = st.number_input("Dosis Aplicadas (Canes)", min_value=0, step=1, value=50)
+            integrantes_input = st.text_input("Integrantes (Separados por coma)", value="Tec. Angela, Lic. Ethel")
+            observaciones_input = st.text_area("Observaciones", value="")
+
+        btn_guardar = st.form_submit_button("💾 Guardar Registro de Avance", type="primary", use_container_width=True)
 
         if btn_guardar:
-            if not responsable or not integrantes_sel:
-                st.warning("⚠️ Debes ingresar el responsable e integrantes de la brigada (mínimo 1, máximo 2).")
-            else:
-                ip_cli = get_remote_ip()
-                guardar_registro(str(fecha), eess, turno, brigada, integrantes_sel, responsable, zona, int(dosis), obs, st.session_state["username"], ip_cli)
-                st.success("✅ ¡Registro guardado exitosamente!")
+            guardar_avance_db(
+                fecha_input, eess_input, turno_input, brigada_input, 
+                integrantes_input, responsable_input, zona_input, 
+                dosis_input, observaciones_input, st.session_state["username"]
+            )
+            st.success("✅ Registro guardado con éxito.")
+            st.rerun()
 
     st.markdown("---")
     st.subheader("📋 Gestión y Edición de Registros Guardados")
-    st.caption("Puedes editar directamente los valores en la tabla y presionar 'Guardar Cambios' o seleccionar la opción para eliminar un registro.")
+    st.caption("Puedes editar directamente los valores en la tabla y presionar 'Guardar Cambios' o seleccionar las opciones para eliminar/vaciar registros.")
     
     df_all = cargar_datos()
     if not df_all.empty:
@@ -419,14 +272,33 @@ if opcion == "📝 Registrar Avance Diario":
             df_mostrar = df_all.copy()
 
         if not df_mostrar.empty:
+            # 1. ORDEN DE COLUMNAS SOLICITADO (Integrantes va después de Dosis)
+            columnas_ordenadas = [
+                "id", "fecha", "eess", "turno", "brigada", 
+                "responsable", "zona", "dosis", "integrantes", 
+                "observaciones", "usuario_registro", "fecha_hora_modificacion", "equipo_ip"
+            ]
+            
+            cols_presentes = [c for c in columnas_ordenadas if c in df_mostrar.columns]
+            df_mostrar = df_mostrar[cols_presentes]
+
+            # 3. EDITOR CON VÍNCULO A LAS LISTAS DE LOS CSVs
             df_edited = st.data_editor(
                 df_mostrar,
                 column_config={
                     "id": st.column_config.NumberColumn("ID", disabled=True),
-                    "brigada": st.column_config.SelectboxColumn("Brigada", options=LISTA_BRIGADAS, required=True),
-                    "turno": st.column_config.SelectboxColumn("Turno", options=LISTA_TURNOS, required=True),
+                    "fecha": st.column_config.DateColumn("Fecha", required=True),
                     "eess": st.column_config.SelectboxColumn("EESS", options=LISTA_EESS, required=True),
-                    "dosis": st.column_config.NumberColumn("Dosis", min_value=0, step=1, required=True)
+                    "turno": st.column_config.SelectboxColumn("Turno", options=LISTA_TURNOS, required=True),
+                    "brigada": st.column_config.SelectboxColumn("Brigada", options=LISTA_BRIGADAS, required=True),
+                    "zona": st.column_config.SelectboxColumn("Zona / Lugar", options=LISTA_ZONAS, required=True),
+                    "dosis": st.column_config.NumberColumn("Dosis", min_value=0, step=1, required=True),
+                    "integrantes": st.column_config.TextColumn(
+                        "Integrantes (PERSONAL.csv)", 
+                        help="Nombres separados por coma tomados de PERSONAL.csv",
+                        required=True
+                    ),
+                    "observaciones": st.column_config.TextColumn("Observaciones")
                 },
                 disabled=["usuario_registro", "fecha_hora_modificacion", "equipo_ip"],
                 use_container_width=True,
@@ -436,6 +308,7 @@ if opcion == "📝 Registrar Avance Diario":
 
             col_a, col_b = st.columns([1, 1])
             
+            # GUARDAR CAMBIOS EDITADOS EN LA TABLA
             with col_a:
                 if st.button("💾 Guardar Cambios Editados", type="primary", use_container_width=True):
                     for _, row in df_edited.iterrows():
@@ -447,13 +320,41 @@ if opcion == "📝 Registrar Avance Diario":
                     st.success("✅ Cambios actualizados correctamente en la base de datos.")
                     st.rerun()
 
+            # 2. SECCIÓN DE ELIMINACIÓN Y VACIADO TOTAL (RESET A 0 CON REORDENAMIENTO DE IDs)
             with col_b:
-                with st.expander("🗑️ Eliminar un registro"):
-                    id_eliminar = st.number_input("Ingresa el ID del registro a eliminar:", min_value=1, step=1)
-                    if st.button("❌ Confirmar y Eliminar Registro", type="secondary"):
-                        eliminar_registro_db(id_eliminar)
-                        st.success(f"Registro ID {id_eliminar} eliminado correctamente.")
-                        st.rerun()
+                with st.expander("🗑️ Opciones de Eliminación / Limpieza de Registros"):
+                    modo_eliminar = st.radio(
+                        "Selecciona una acción:",
+                        ["Eliminar un registro individual por ID", "🔥 Vaciar TODOS los registros (Comenzar de 0)"]
+                    )
+                    
+                    if modo_eliminar == "Eliminar un registro individual por ID":
+                        ids_disponibles = df_mostrar['id'].tolist()
+                        id_eliminar = st.number_input("Ingresa el ID del registro a eliminar:", min_value=1, step=1, value=ids_disponibles[0] if ids_disponibles else 1)
+                        
+                        if st.button("❌ Confirmar y Eliminar Registro", type="secondary"):
+                            if id_eliminar in ids_disponibles:
+                                eliminar_registro_db(id_eliminar)
+                                st.success(f"Registro ID {id_eliminar} eliminado. Los IDs restantes han sido reordenados automáticamente.")
+                                st.rerun()
+                            else:
+                                st.error(f"El ID {id_eliminar} no existe o no tienes permiso para eliminarlo.")
+
+                    elif modo_eliminar == "🔥 Vaciar TODOS los registros (Comenzar de 0)":
+                        st.warning("⚠️ ¡Atención! Esta acción eliminará permanentemente TODOS los registros de la base de datos y reiniciará el contador de IDs a 1.")
+                        confirmar_reset = st.checkbox("Entiendo el riesgo y deseo vaciar la base de datos por completo.")
+                        
+                        if st.button("🚨 VACIAR BASE DE DATOS COMPLETA", type="primary", disabled=not confirmar_reset):
+                            try:
+                                vaciar_base_datos_db()
+                                st.success("🎉 Base de datos vaciada con éxito. Listo para comenzar de 0.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error al intentar vaciar la base de datos: {e}")
+        else:
+            st.info("No hay registros guardados para mostrar.")
+    else:
+        st.info("La base de datos se encuentra vacía (0 registros).")
 
 # ==========================================
 # MÓDULO 2: DASHBOARD Y VACUNÓMETRO (DIRECTOR)
@@ -464,9 +365,8 @@ elif opcion == "📊 Dashboard y Vacunómetro":
     with col_head_dash:
         st.header("📊 Dashboard Analítico y Vacunómetro MINSA")
     
-    # BOTÓN DE REFRESH / ACTUALIZACIÓN EN TIEMPO REAL
     with col_btn_ref:
-        st.write("") # Espaciador
+        st.write("") 
         if st.button("🔄 Actualizar Datos", type="primary", use_container_width=True, help="Haz clic para recargar los últimos avances y metas sin salir del sistema"):
             st.cache_data.clear()
             st.rerun()
@@ -474,20 +374,17 @@ elif opcion == "📊 Dashboard y Vacunómetro":
     df = cargar_datos()
     df_metas_db = cargar_metas()
 
-    # Construir mapa actualizado de metas amarrando METAS.csv y la BD
-    mapa_metas = METAS_PREDETERMINADAS.copy()
+    mapa_metas = obtener_metas_csv()
     if not df_metas_db.empty:
         for _, r in df_metas_db.iterrows():
-            mapa_metas[str(r['eess']).strip()] = int(r['meta_canes'])
+            mapa_metas[normalizar_texto(r['eess'])] = int(r['meta_canes'])
 
     st.subheader("🔍 Filtros de Visualización")
     f1, f2, f3 = st.columns(3)
     
-    # Filtro de EESS dinámico
     eess_disponibles = LISTA_EESS
     eess_sel = f1.multiselect("Establecimiento de Salud", eess_disponibles, default=eess_disponibles)
     
-    # Zonas y Turnos filtrados
     if not df.empty:
         zonas_disponibles = sorted(list(set(df['zona'].unique().tolist() + LISTA_ZONAS)))
         turnos_disponibles = df['turno'].unique().tolist()
@@ -498,7 +395,7 @@ elif opcion == "📊 Dashboard y Vacunómetro":
     zona_sel = f2.multiselect("Zona de Intervención", zonas_disponibles, default=zonas_disponibles)
     turno_sel = f3.multiselect("Turno", turnos_disponibles, default=turnos_disponibles)
 
-    # Filtrar Datos de Avance
+    # Filtrado de Avances
     if not df.empty:
         df_f = df[(df['eess'].isin(eess_sel)) & (df['zona'].isin(zona_sel)) & (df['turno'].isin(turno_sel))]
         total_vacunados = pd.to_numeric(df_f['dosis'], errors='coerce').fillna(0).sum()
@@ -506,8 +403,8 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         df_f = pd.DataFrame()
         total_vacunados = 0
 
-    # CÁLCULO DE META PROGRAMADA AMARRADA AL EESS
-    meta_filtrada = sum([mapa_metas.get(e, 1000) for e in eess_sel])
+    # CÁLCULO DE META CON BÚSQUEDA TOLERANTE A TYPOS
+    meta_filtrada = sum([obtener_meta_establecimiento(e, mapa_metas) for e in eess_sel])
     pct_avance = (total_vacunados / meta_filtrada * 100) if meta_filtrada > 0 else 0.0
 
     st.markdown("---")
@@ -521,19 +418,21 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         st.metric("% Cobertura Alcanzado", f"{pct_avance:.1f} %")
 
     with c_vac2:
+        # ENCABEZADO MEJORADO Y ESPACIADO
+        st.markdown("<h4 style='text-align: center; color: #003366; margin-bottom: 0px;'>🎯 Avance vs Meta Programada</h4>", unsafe_allow_html=True)
+        
         fig_gauge = go.Figure(go.Indicator(
             mode = "gauge+number+delta",
             value = total_vacunados,
             domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "Avance vs Meta Programada", 'font': {'size': 18}},
             delta = {'reference': meta_filtrada, 'increasing': {'color': "green"}},
             gauge = {
-                'axis': {'range': [None, max(meta_filtrada, total_vacunados if total_vacunados>0 else 100)]},
+                'axis': {'range': [None, max(meta_filtrada, total_vacunados if total_vacunados > 0 else 100)]},
                 'bar': {'color': "#003366"},
                 'steps': [
-                    {'range': [0, meta_filtrada*0.5], 'color': "#FADBD8"},
-                    {'range': [meta_filtrada*0.5, meta_filtrada*0.85], 'color': "#FCF3CF"},
-                    {'range': [meta_filtrada*0.85, meta_filtrada], 'color': "#D4EFDF"}
+                    {'range': [0, meta_filtrada * 0.5], 'color': "#FADBD8"},
+                    {'range': [meta_filtrada * 0.5, meta_filtrada * 0.85], 'color': "#FCF3CF"},
+                    {'range': [meta_filtrada * 0.85, meta_filtrada], 'color': "#D4EFDF"}
                 ],
                 'threshold': {
                     'line': {'color': "red", 'width': 4},
@@ -542,190 +441,39 @@ elif opcion == "📊 Dashboard y Vacunómetro":
                 }
             }
         ))
-        fig_gauge.update_layout(height=280, margin=dict(l=20, r=20, t=30, b=20))
+        
+        fig_gauge.update_layout(
+            height=320, 
+            margin=dict(l=30, r=30, t=20, b=20)
+        )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-    st.markdown("---")
+# ==========================================
+# MÓDULO 3: CONFIGURACIÓN Y METAS
+# ==========================================
+elif opcion == "⚙️ Configuración / Metas":
+    st.header("⚙️ Configuración del Sistema y Metas")
+    st.caption("Gestiona las metas de vacunación por establecimiento de salud.")
 
-    # SECCIÓN DE RANKING DE PRODUCCIÓN POR PERSONAL (50/50 POR INTEGRANTE)
-    st.subheader("🏆 Ranking de Producción por Personal (Producción Acumulada)")
-    st.caption("Las dosis reportadas por cada brigada se dividen en partes iguales entre sus integrantes para el cálculo acumulado individual.")
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
 
-    if not df_f.empty:
-        prod_por_persona = {}
-        for _, row in df_f.iterrows():
-            dosis_total = float(row['dosis'])
-            raw_integrantes = str(row['integrantes'])
-            
-            lista_int = [i.strip() for i in raw_integrantes.split(',') if i.strip() != '']
-            cant_int = len(lista_int)
-            
-            if cant_int > 0:
-                dosis_individual = dosis_total / cant_int
-                for persona in lista_int:
-                    prod_por_persona[persona] = prod_por_persona.get(persona, 0.0) + dosis_individual
+    with st.form("form_metas"):
+        eess_meta = st.selectbox("Selecciona Establecimiento", LISTA_EESS)
+        meta_val = st.number_input("Meta de Canes", min_value=1, value=1400, step=50)
+        btn_meta = st.form_submit_button("Guardar Meta")
 
-        if prod_por_persona:
-            df_prod = pd.DataFrame(list(prod_por_persona.items()), columns=['Personal', 'Dosis Acumuladas'])
-            df_prod['Dosis Acumuladas'] = df_prod['Dosis Acumuladas'].round(1)
-            df_prod = df_prod.sort_values(by='Dosis Acumuladas', ascending=True)
+        if btn_meta:
+            c.execute("DELETE FROM metas WHERE eess=?", (eess_meta,))
+            c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_meta, meta_val))
+            conn.commit()
+            st.success(f"Meta actualizada para {eess_meta}: {meta_val:,} canes")
+            st.rerun()
 
-            fig_prod = px.bar(
-                df_prod,
-                x='Dosis Acumuladas',
-                y='Personal',
-                orientation='h',
-                text='Dosis Acumuladas',
-                color='Dosis Acumuladas',
-                color_continuous_scale='Blues',
-                title="Producción Individual Acumulada por Vacunador"
-            )
-            fig_prod.update_layout(height=max(350, len(df_prod)*30), showlegend=False)
-            st.plotly_chart(fig_prod, use_container_width=True)
-        else:
-            st.info("No se registraron integrantes para calcular la producción acumulada.")
+    st.subheader("📋 Metas Actualmente Registradas")
+    df_m = cargar_metas()
+    if not df_m.empty:
+        st.dataframe(df_m, use_container_width=True)
     else:
-        st.info("No hay registros que coincidan con los filtros seleccionados.")
-
-    st.markdown("---")
-
-    if not df_f.empty:
-        st.subheader("📈 Avance Diario y Progreso Acumulado de Vacunación")
-        
-        df_f['fecha_dt'] = pd.to_datetime(df_f['fecha'])
-        df_diario = df_f.groupby('fecha_dt')['dosis'].sum().reset_index().sort_values('fecha_dt')
-        df_diario['acumulado'] = df_diario['dosis'].cumsum()
-
-        fig_comb = make_subplots(specs=[[{"secondary_y": True}]])
-
-        fig_comb.add_trace(
-            go.Bar(
-                x=df_diario['fecha_dt'].dt.strftime('%Y-%m-%d'),
-                y=df_diario['dosis'],
-                name="Dosis Diarias (Barras)",
-                marker_color='#003366',
-                text=df_diario['dosis'],
-                textposition='auto'
-            ),
-            secondary_y=False
-        )
-
-        fig_comb.add_trace(
-            go.Scatter(
-                x=df_diario['fecha_dt'].dt.strftime('%Y-%m-%d'),
-                y=df_diario['acumulado'],
-                name="Progreso Acumulado (Línea)",
-                mode='lines+markers+text',
-                line=dict(color='#D91023', width=3),
-                text=df_diario['acumulado'],
-                textposition='top center'
-            ),
-            secondary_y=True
-        )
-
-        fig_comb.update_layout(
-            title_text="Evolución Diaria y Progreso Acumulado de Canes Vacunados",
-            xaxis_title="Fecha de Intervención",
-            hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-
-        fig_comb.update_yaxes(title_text="<b>Dosis Vacunadas x Día</b>", secondary_y=False)
-        fig_comb.update_yaxes(title_text="<b>Progreso Acumulado Total</b>", secondary_y=True)
-
-        st.plotly_chart(fig_comb, use_container_width=True)
-
-        st.markdown("---")
-
-        g1, g2 = st.columns(2)
-
-        with g1:
-            st.subheader("📍 Cobertura por Zona de Intervención")
-            df_z = df_f.groupby('zona')['dosis'].sum().reset_index().sort_values(by='dosis', ascending=True)
-            fig_z = px.bar(
-                df_z, x='dosis', y='zona', orientation='h', text='dosis',
-                color_discrete_sequence=['#003366'],
-                labels={'dosis': 'Canes Vacunados', 'zona': 'Zona'}
-            )
-            fig_z.update_layout(height=max(400, len(df_z)*25))
-            st.plotly_chart(fig_z, use_container_width=True)
-
-        with g2:
-            st.subheader("👥 Avance por Brigada y Turno")
-            df_b = df_f.groupby(['brigada', 'turno'])['dosis'].sum().reset_index()
-            fig_b = px.bar(df_b, x='brigada', y='dosis', color='turno', barmode='group', text_auto=True,
-                           color_discrete_map={'Mañana': '#003366', 'Tarde': '#D91023'})
-            st.plotly_chart(fig_b, use_container_width=True)
-
-# ==========================================
-# MÓDULO 3: CONFIGURACIÓN MANUAL DE METAS
-# ==========================================
-elif opcion == "🎯 Configuración Manual de Metas":
-    st.header("🎯 Definición y Gestión de Metas por Establecimiento")
-    st.info("Configura individualmente o sube masivamente las metas asignadas a los Establecimientos de Salud.")
-
-    col_form, col_tabla = st.columns([1, 1])
-
-    with col_form:
-        st.subheader("✍️ Registro Manual Individual")
-        with st.form("form_metas"):
-            eess_m = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
-            meta_val = st.number_input("Meta de Canes (Número entero)", min_value=1, value=1400, step=50)
-            btn_m = st.form_submit_button("💾 Guardar / Actualizar Meta", type="primary")
-
-            if btn_m:
-                guardar_meta(eess_m, meta_val)
-                st.success(f"✅ Meta de {meta_val:,} canes registrada para {eess_m}")
-                st.rerun()
-
-        st.markdown("---")
-        st.subheader("📁 Carga Masiva mediante Archivo CSV")
-        file_metas = st.file_uploader("Subir archivo METAS.csv", type=["csv"])
-        if file_metas is not None:
-            try:
-                df_up = pd.read_csv(file_metas, sep=None, engine='python')
-                col_e = [c for c in df_up.columns if str(c).strip().lower() in ['eess', 'establecimiento']][0]
-                col_m = [c for c in df_up.columns if str(c).strip().lower() in ['meta_canes', 'meta']][0]
-                
-                for _, row in df_up.iterrows():
-                    guardar_meta(str(row[col_e]).strip(), int(row[col_m]))
-                st.success("✅ Metas cargadas masivamente con éxito.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al procesar el archivo CSV: {e}")
-
-    with col_tabla:
-        st.subheader("📋 Metas Configuradas Actuales")
-        df_m_curr = cargar_metas()
-        if not df_m_curr.empty:
-            st.dataframe(df_m_curr, use_container_width=True)
-        else:
-            st.warning("Aún no se han configurado metas manuales.")
-
-# ==========================================
-# MÓDULO 4: AUDITORÍA Y CONTROL DE DATOS
-# ==========================================
-elif opcion == "🕵️ Auditoría y Gestión de Datos":
-    st.header("🕵️ Auditoría y Control de Cambios")
-    st.caption("Muestra fecha/hora exacta de modificación, usuario, integrantes de la brigada y dispositivo de origen.")
-
-    df_aud = cargar_datos()
-    st.dataframe(df_aud, use_container_width=True)
-
-    csv_data = df_aud.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Descargar Reporte de Auditoría (CSV)",
-        data=csv_data,
-        file_name=f"Auditoria_VANCAN_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime='text/csv',
-        type="primary"
-    )
-
-# ==========================================
-# PIE DE PÁGINA
-# ==========================================
-st.markdown("""
-    <div class="footer-text">
-        Elaborado por Servicio de Enfermería del C.S. César López Silva / RIS Chaclacayo Chosica / DIRIS Lima Este / MINSA PERÚ
-    </div>
-""", unsafe_allow_html=True)
+        st.info("Usando metas automáticas desde archivos CSV.")
+    conn.close()
