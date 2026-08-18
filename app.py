@@ -81,6 +81,9 @@ METAS_PREDETERMINADAS = {
     "C.S. Chosica": 4000
 }
 
+# Lista predeterminada de brigadas del 1 al 10
+LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 11)]
+
 def init_db():
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
@@ -187,6 +190,25 @@ def guardar_registro(fecha, eess, turno, brigada, integrantes, responsable, zona
     conn.commit()
     conn.close()
 
+def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, obs):
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''
+        UPDATE avances 
+        SET fecha=?, eess=?, turno=?, brigada=?, integrantes=?, responsable=?, zona=?, dosis=?, observaciones=?, fecha_hora_modificacion=?
+        WHERE id=?
+    ''', (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, obs, fecha_hora_actual, id_reg))
+    conn.commit()
+    conn.close()
+
+def eliminar_registro_db(id_reg):
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute('DELETE FROM avances WHERE id=?', (id_reg,))
+    conn.commit()
+    conn.close()
+
 def guardar_meta(eess, meta):
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
@@ -284,7 +306,9 @@ if opcion == "📝 Registrar Avance Diario":
             fecha = st.date_input("Fecha de Intervención", datetime.now())
             eess = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
             turno = st.selectbox("Turno", LISTA_TURNOS)
-            brigada = st.text_input("Código de Brigada", placeholder="Ej. Brigada 01")
+            
+            # SELECCIÓN PREDETERMINADA DE BRIGADA (01 al 10)
+            brigada = st.selectbox("Seleccionar Brigada", LISTA_BRIGADAS)
             
             integrantes_sel = st.multiselect(
                 "Integrantes de la Brigada (Conformación del día)",
@@ -302,19 +326,61 @@ if opcion == "📝 Registrar Avance Diario":
         btn_guardar = st.form_submit_button("🚀 Guardar Registro", type="primary", use_container_width=True)
 
         if btn_guardar:
-            if not brigada or not responsable or not integrantes_sel:
-                st.warning("⚠️ Debes ingresar el código de brigada, responsable e integrantes.")
+            if not responsable or not integrantes_sel:
+                st.warning("⚠️ Debes ingresar el responsable e integrantes de la brigada.")
             else:
                 ip_cli = get_remote_ip()
                 guardar_registro(str(fecha), eess, turno, brigada, integrantes_sel, responsable, zona, int(dosis), obs, st.session_state["username"], ip_cli)
                 st.success("✅ ¡Registro guardado exitosamente!")
 
-    st.subheader("📋 Mis registros ingresados")
+    st.markdown("---")
+    st.subheader("📋 Gestión y Edición de Registros Guardados")
+    st.caption("Puedes editar directamente los valores en la tabla y presionar 'Guardar Cambios' o seleccionar la opción para eliminar un registro.")
+    
     df_all = cargar_datos()
     if not df_all.empty:
-        df_propios = df_all[df_all['usuario_registro'] == st.session_state["username"]]
-        cols_mostrar = [c for c in ['fecha', 'eess', 'turno', 'brigada', 'integrantes', 'zona', 'dosis', 'fecha_hora_modificacion'] if c in df_propios.columns]
-        st.dataframe(df_propios[cols_mostrar], use_container_width=True)
+        if st.session_state["user_role"] == "Brigadista / Digitador":
+            df_mostrar = df_all[df_all['usuario_registro'] == st.session_state["username"]].copy()
+        else:
+            df_mostrar = df_all.copy()
+
+        if not df_mostrar.empty:
+            # Editor interactivo de datos
+            df_edited = st.data_editor(
+                df_mostrar,
+                column_config={
+                    "id": st.column_config.NumberColumn("ID", disabled=True),
+                    "brigada": st.column_config.SelectboxColumn("Brigada", options=LISTA_BRIGADAS, required=True),
+                    "turno": st.column_config.SelectboxColumn("Turno", options=LISTA_TURNOS, required=True),
+                    "eess": st.column_config.SelectboxColumn("EESS", options=LISTA_EESS, required=True),
+                    "dosis": st.column_config.NumberColumn("Dosis", min_value=0, step=1, required=True)
+                },
+                disabled=["usuario_registro", "fecha_hora_modificacion", "equipo_ip"],
+                use_container_width=True,
+                num_rows="dynamic",
+                key="editor_registros"
+            )
+
+            col_a, col_b = st.columns([1, 1])
+            
+            with col_a:
+                if st.button("💾 Guardar Cambios Editados", type="primary", use_container_width=True):
+                    for _, row in df_edited.iterrows():
+                        actualizar_registro_db(
+                            row['id'], row['fecha'], row['eess'], row['turno'], 
+                            row['brigada'], str(row['integrantes']), row['responsable'], 
+                            row['zona'], int(row['dosis']), str(row['observaciones'])
+                        )
+                    st.success("✅ Cambios actualizados correctamente en la base de datos.")
+                    st.rerun()
+
+            with col_b:
+                with st.expander("🗑️ Eliminar un registro"):
+                    id_eliminar = st.number_input("Ingresa el ID del registro a eliminar:", min_value=1, step=1)
+                    if st.button("❌ Confirmar y Eliminar Registro", type="secondary"):
+                        eliminar_registro_db(id_eliminar)
+                        st.success(f"Registro ID {id_eliminar} eliminado correctamente.")
+                        st.rerun()
 
 # ==========================================
 # MÓDULO 2: DASHBOARD Y VACUNÓMETRO
@@ -343,7 +409,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         total_vacunados = pd.to_numeric(df_f['dosis'], errors='coerce').fillna(0).sum()
 
-        # Cálculo de Meta Total
         if not df_metas.empty:
             df_metas_filtradas = df_metas[df_metas['eess'].isin(eess_sel)]
             meta_filtrada = df_metas_filtradas['meta_canes'].sum()
@@ -357,7 +422,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         st.markdown("---")
 
-        # SECCIÓN VACUNÓMETRO
         c_vac1, c_vac2 = st.columns([1, 2])
         
         with c_vac1:
@@ -393,7 +457,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         st.markdown("---")
 
-        # GRÁFICO COMBINADO: BARRAS DIARIAS + LÍNEA DE PROGRESO ACUMULADO
         st.subheader("📈 Avance Diario y Progreso Acumulado de Vacunación")
         
         df_f['fecha'] = pd.to_datetime(df_f['fecha'])
