@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import sqlite3
 from datetime import datetime
 import os
@@ -15,7 +16,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilos CSS con colores institucionales MINSA
+# Estilos CSS
 st.markdown("""
     <style>
     .main-header {
@@ -24,7 +25,16 @@ st.markdown("""
         padding: 15px;
         text-align: center;
         border-radius: 8px;
-        margin-bottom: 25px;
+        margin-bottom: 20px;
+    }
+    .footer-text {
+        text-align: center;
+        color: #555;
+        font-weight: bold;
+        padding: 15px;
+        margin-top: 30px;
+        border-top: 2px solid #003366;
+        font-size: 0.9em;
     }
     .stButton>button {
         background-color: #003366;
@@ -38,22 +48,37 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Encabezado Principal MINSA
-st.markdown("""
-    <div class="main-header">
-        <h2>MINISTERIO DE SALUD DEL PERÚ - VANCAN</h2>
-        <h4>Sistema de Monitoreo y Control de Vacunación Canina</h4>
-    </div>
-""", unsafe_allow_html=True)
+# Encabezado con soporte para Logo Institucional
+col_logo, col_titulo = st.columns([1, 4])
+
+with col_logo:
+    # Busca 'logo.png', 'logo.jpg' o 'logo.jpeg' en la raíz del proyecto
+    logo_path = None
+    for ext in ['logo.png', 'logo.jpg', 'logo.jpeg', 'LOGO.PNG', 'LOGO.JPG']:
+        if os.path.exists(ext):
+            logo_path = ext
+            break
+    
+    if logo_path:
+        st.image(logo_path, use_container_width=True)
+    else:
+        st.markdown("🏛️ **MINSA**")
+
+with col_titulo:
+    st.markdown("""
+        <div class="main-header">
+            <h2>MINISTERIO DE SALUD DEL PERÚ - VANCAN</h2>
+            <h4>Sistema de Monitoreo y Control de Vacunación Canina</h4>
+        </div>
+    """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BASE DE DATOS Y LECTURA DE ARCHIVO "ZONAS"
+# 2. BASE DE DATOS Y CARGA DE ARCHIVOS
 # ==========================================
 def init_db():
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     
-    # Tabla de avances de vacunación
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,6 +86,7 @@ def init_db():
             eess TEXT,
             turno TEXT,
             brigada TEXT,
+            integrantes TEXT,
             responsable TEXT,
             zona TEXT,
             dosis INTEGER,
@@ -71,17 +97,19 @@ def init_db():
         )
     ''')
     
-    # Migración/Verificación de columnas de auditoría
+    # Migración de columna 'integrantes' si el archivo sqlite es existente
     c.execute("PRAGMA table_info(avances)")
-    columnas_existentes = [columna[1] for columna in c.fetchall()]
-    if 'usuario_registro' not in columnas_existentes:
+    cols = [col[1] for col in c.fetchall()]
+    if 'integrantes' not in cols:
+        c.execute("ALTER TABLE avances ADD COLUMN integrantes TEXT DEFAULT ''")
+    if 'usuario_registro' not in cols:
         c.execute("ALTER TABLE avances ADD COLUMN usuario_registro TEXT DEFAULT 'desconocido'")
-    if 'fecha_hora_modificacion' not in columnas_existentes:
+    if 'fecha_hora_modificacion' not in cols:
         c.execute("ALTER TABLE avances ADD COLUMN fecha_hora_modificacion TEXT DEFAULT ''")
-    if 'equipo_ip' not in columnas_existentes:
+    if 'equipo_ip' not in cols:
         c.execute("ALTER TABLE avances ADD COLUMN equipo_ip TEXT DEFAULT 'desconocido'")
 
-    # Tabla para Metas Manuales por EESS
+    # Tabla de metas manuales por EESS
     c.execute('''
         CREATE TABLE IF NOT EXISTS metas (
             eess TEXT PRIMARY KEY,
@@ -94,20 +122,17 @@ def init_db():
 
 init_db()
 
-# Carga de lista de Zonas considerando archivo ZONAS.csv / zonas.csv
+# Carga de lista de Zonas desde ZONAS.csv
 def obtener_zonas():
     archivos_posibles = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv', 'ZONAS']
-    
     for archivo in archivos_posibles:
         if os.path.exists(archivo):
             try:
-                # Lectura tolerante a codificación UTF-8 / Latin-1
                 try:
                     df_z = pd.read_csv(archivo, encoding='utf-8')
                 except UnicodeDecodeError:
                     df_z = pd.read_csv(archivo, encoding='latin1')
 
-                # Detección de columna 'ZONAS', 'ZONA', 'LUGAR', 'SECTOR' o la primera por defecto
                 col_zona = None
                 for c in df_z.columns:
                     if str(c).strip().upper() in ['ZONAS', 'ZONA', 'LUGAR', 'SECTOR']:
@@ -124,22 +149,29 @@ def obtener_zonas():
             except Exception as e:
                 print(f"Error al leer {archivo}: {e}")
                 
-    # Lista de respaldo si no se encuentra el archivo ZONAS.csv cargado
     return ["Sector Central", "Ñaña", "Huascata", "Los Cedros", "Santa Inés", "Ocharán", "Carapongo"]
 
 LISTA_ZONAS = obtener_zonas()
 LISTA_EESS = ["C.S. César López Silva", "C.S. Ñaña", "C.S. Morón", "C.S. Chosica"]
 LISTA_TURNOS = ["Mañana", "Tarde"]
 
-# Funciones SQLite
-def guardar_registro(fecha, eess, turno, brigada, responsable, zona, dosis, obs, usuario, ip_equipo):
+# Lista predefinida de personal para la conformación de brigadas
+LISTA_PERSONAL = [
+    "Lic. Ethel", "Lic. Sara", "Lic. Amanda", 
+    "Tec. Angela", "Tec. Violeta", "Lic. Carlos Mendoza", 
+    "Lic. María Torres", "Tec. Juan Pérez", "Tec. Rosa Gómez", "Lic. Ana Ramos"
+]
+
+def guardar_registro(fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, obs, usuario, ip_equipo):
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    str_integrantes = ", ".join(integrantes) if isinstance(integrantes, list) else str(integrantes)
+    
     c.execute('''
-        INSERT INTO avances (fecha, eess, turno, brigada, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (fecha, eess, turno, brigada, responsable, zona, dosis, obs, usuario, fecha_hora_actual, ip_equipo))
+        INSERT INTO avances (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (fecha, eess, turno, brigada, str_integrantes, responsable, zona, dosis, obs, usuario, fecha_hora_actual, ip_equipo))
     conn.commit()
     conn.close()
 
@@ -154,11 +186,6 @@ def cargar_datos():
     conn = sqlite3.connect('vancan_data.db')
     df = pd.read_sql_query("SELECT * FROM avances", conn)
     conn.close()
-    
-    columnas_esperadas = ['usuario_registro', 'fecha_hora_modificacion', 'equipo_ip', 'dosis', 'eess', 'zona', 'turno']
-    for col in columnas_esperadas:
-        if col not in df.columns:
-            df[col] = '' if col != 'dosis' else 0
     return df
 
 def cargar_metas():
@@ -169,8 +196,7 @@ def cargar_metas():
 
 def get_remote_ip():
     try:
-        headers = st.context.headers
-        return headers.get("X-Forwarded-For", "Dispositivo Móvil / Web")
+        return st.context.headers.get("X-Forwarded-For", "Dispositivo Móvil / Web")
     except Exception:
         return "Web Client"
 
@@ -202,6 +228,13 @@ if not st.session_state["logged_in"]:
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrecta")
+
+    # Pie de página en el login
+    st.markdown("""
+        <div class="footer-text">
+            Elaborado por Servicio de Enfermería del C.S. César López Silva / RIS Chaclacayo Chosica / DIRIS Lima Este / MINSA PERÚ
+        </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # ==========================================
@@ -232,7 +265,7 @@ if opcion == "Cerrar Sesión":
 # MÓDULO 1: REGISTRO DE AVANCE DIARIO
 # ==========================================
 if opcion == "📝 Registrar Avance Diario":
-    st.header("📝 Carga Diario de Vacunación Canina")
+    st.header("📝 Carga Diaria de Vacunación Canina")
     
     with st.form("form_carga", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -240,12 +273,18 @@ if opcion == "📝 Registrar Avance Diario":
             fecha = st.date_input("Fecha de Intervención", datetime.now())
             eess = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
             turno = st.selectbox("Turno", LISTA_TURNOS)
-            brigada = st.text_input("Código de Brigada / Equipo", placeholder="Ej. Brigada 05")
+            brigada = st.text_input("Código de Brigada", placeholder="Ej. Brigada 01")
+            
+            # Selección múltiple de integrantes del personal
+            integrantes_sel = st.multiselect(
+                "Integrantes de la Brigada (Conformación del día)",
+                options=LISTA_PERSONAL,
+                help="Selecciona las personas que conforman esta brigada hoy"
+            )
         
         with col2:
             responsable = st.text_input("Responsable del Registro", placeholder="Ej. Lic. Carlos Mendoza")
-            # Selección con buscador dinámico de los 100+ lugares cargados desde ZONAS
-            zona = st.selectbox("Zona / Lugar de Intervención (Buscador activo)", LISTA_ZONAS)
+            zona = st.selectbox("Zona / Lugar (Buscador activo)", LISTA_ZONAS)
             dosis = st.number_input("Canes Vacunados (Dosis)", min_value=0, step=1)
 
         obs = st.text_area("Observaciones o Incidencias")
@@ -253,21 +292,19 @@ if opcion == "📝 Registrar Avance Diario":
         btn_guardar = st.form_submit_button("🚀 Guardar Registro", type="primary", use_container_width=True)
 
         if btn_guardar:
-            if not brigada or not responsable:
-                st.warning("⚠️ Debes ingresar la brigada y el responsable.")
+            if not brigada or not responsable or not integrantes_sel:
+                st.warning("⚠️ Debes ingresar el código de brigada, responsable e integrantes.")
             else:
                 ip_cli = get_remote_ip()
-                guardar_registro(str(fecha), eess, turno, brigada, responsable, zona, int(dosis), obs, st.session_state["username"], ip_cli)
+                guardar_registro(str(fecha), eess, turno, brigada, integrantes_sel, responsable, zona, int(dosis), obs, st.session_state["username"], ip_cli)
                 st.success("✅ ¡Registro guardado exitosamente!")
 
     st.subheader("📋 Mis registros ingresados")
     df_all = cargar_datos()
     if not df_all.empty:
         df_propios = df_all[df_all['usuario_registro'] == st.session_state["username"]]
-        cols_mostrar = [c for c in ['fecha', 'eess', 'turno', 'brigada', 'zona', 'dosis', 'fecha_hora_modificacion'] if c in df_propios.columns]
+        cols_mostrar = [c for c in ['fecha', 'eess', 'turno', 'brigada', 'integrantes', 'zona', 'dosis', 'fecha_hora_modificacion'] if c in df_propios.columns]
         st.dataframe(df_propios[cols_mostrar], use_container_width=True)
-    else:
-        st.info("Aún no se registran datos en esta sesión.")
 
 # ==========================================
 # MÓDULO 2: DASHBOARD Y VACUNÓMETRO
@@ -296,7 +333,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         total_vacunados = pd.to_numeric(df_f['dosis'], errors='coerce').fillna(0).sum()
 
-        # Suma de la meta manual según los EESS seleccionados
         if not df_metas.empty:
             meta_filtrada = df_metas[df_metas['eess'].isin(eess_sel)]['meta_canes'].sum()
         else:
@@ -342,16 +378,64 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         st.markdown("---")
 
+        # GRÁFICO COMBINADO: BARRAS DIARIAS + LÍNEA DE PROGRESO ACUMULADO
+        st.subheader("📈 Avance Diario y Progreso Acumulado de Vacunación")
+        
+        df_f['fecha'] = pd.to_datetime(df_f['fecha'])
+        df_diario = df_f.groupby('fecha')['dosis'].sum().reset_index().sort_values('fecha')
+        df_diario['acumulado'] = df_diario['dosis'].cumsum()
+
+        fig_comb = make_subplots(specs=[[{"secondary_y": True}]])
+
+        # Barras: Avance Diario
+        fig_comb.add_trace(
+            go.Bar(
+                x=df_diario['fecha'].dt.strftime('%Y-%m-%d'),
+                y=df_diario['dosis'],
+                name="Dosis Diarias (Barras)",
+                marker_color='#003366',
+                text=df_diario['dosis'],
+                textposition='auto'
+            ),
+            secondary_y=False
+        )
+
+        # Línea: Progreso Acumulado
+        fig_comb.add_trace(
+            go.Scatter(
+                x=df_diario['fecha'].dt.strftime('%Y-%m-%d'),
+                y=df_diario['acumulado'],
+                name="Progreso Acumulado (Línea)",
+                mode='lines+markers+text',
+                line=dict(color='#D91023', width=3),
+                text=df_diario['acumulado'],
+                textposition='top center'
+            ),
+            secondary_y=True
+        )
+
+        fig_comb.update_layout(
+            title_text="Evolución Diaria y Progreso Acumulado de Canes Vacunados",
+            xaxis_title="Fecha de Intervención",
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+
+        fig_comb.update_yaxes(title_text="<b>Dosis Vacunadas x Día</b>", secondary_y=False)
+        fig_comb.update_yaxes(title_text="<b>Progreso Acumulado Total</b>", secondary_y=True)
+
+        st.plotly_chart(fig_comb, use_container_width=True)
+
+        st.markdown("---")
+
         # Gráficos por Zonas y Brigadas
         g1, g2 = st.columns(2)
 
         with g1:
             st.subheader("📍 Cobertura por Zona de Intervención")
-            df_z = df_f.groupby('zona')['dosis'].sum().reset_index()
-            df_z = df_z.sort_values(by='dosis', ascending=True)
+            df_z = df_f.groupby('zona')['dosis'].sum().reset_index().sort_values(by='dosis', ascending=True)
             fig_z = px.bar(
-                df_z, x='dosis', y='zona', orientation='h', 
-                text='dosis',
+                df_z, x='dosis', y='zona', orientation='h', text='dosis',
                 color_discrete_sequence=['#003366'],
                 labels={'dosis': 'Canes Vacunados', 'zona': 'Zona'}
             )
@@ -370,7 +454,7 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 # ==========================================
 elif opcion == "🎯 Configuración Manual de Metas":
     st.header("🎯 Definición Manual de Metas por Establecimiento")
-    st.info("Ingresa o actualiza manualmente la meta de canes a vacunar para cada Establecimiento de Salud.")
+    st.info("Ingreso exclusivo por el Coordinador/Administrador.")
 
     col_form, col_tabla = st.columns([1, 1])
 
@@ -391,14 +475,14 @@ elif opcion == "🎯 Configuración Manual de Metas":
         if not df_m_curr.empty:
             st.dataframe(df_m_curr, use_container_width=True)
         else:
-            st.warning("Aún no se han configurado metas manuales para ningún EESS.")
+            st.warning("Aún no se han configurado metas manuales.")
 
 # ==========================================
 # MÓDULO 4: AUDITORÍA Y CONTROL DE DATOS
 # ==========================================
 elif opcion == "🕵️ Auditoría y Gestión de Datos":
     st.header("🕵️ Auditoría y Control de Cambios")
-    st.caption("Muestra la fecha/hora exacta de registro/modificación, el usuario y la IP o dispositivo de origen.")
+    st.caption("Muestra fecha/hora exacta de modificación, usuario, integrantes de la brigada y dispositivo de origen.")
 
     df_aud = cargar_datos()
     st.dataframe(df_aud, use_container_width=True)
@@ -411,3 +495,12 @@ elif opcion == "🕵️ Auditoría y Gestión de Datos":
         mime='text/csv',
         type="primary"
     )
+
+# ==========================================
+# PIE DE PÁGINA (CHERRY MINSA)
+# ==========================================
+st.markdown("""
+    <div class="footer-text">
+        Elaborado por Servicio de Enfermería del C.S. César López Silva / RIS Chaclacayo Chosica / DIRIS Lima Este / MINSA PERÚ
+    </div>
+""", unsafe_allow_html=True)
