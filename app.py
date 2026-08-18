@@ -66,19 +66,19 @@ def init_db():
             dosis INTEGER,
             observaciones TEXT,
             usuario_registro TEXT,
-            fecha_hora_modificacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            fecha_hora_modificacion TEXT,
             equipo_ip TEXT
         )
     ''')
     
-    # MIGRACIÓN AUTOMÁTICA: Agregar columnas si la tabla ya existía con la versión antigua
+    # MIGRACIÓN AUTOMÁTICA SEGURA PARA SQLITE
     c.execute("PRAGMA table_info(avances)")
     columnas_existentes = [columna[1] for columna in c.fetchall()]
     
     if 'usuario_registro' not in columnas_existentes:
         c.execute("ALTER TABLE avances ADD COLUMN usuario_registro TEXT DEFAULT 'desconocido'")
     if 'fecha_hora_modificacion' not in columnas_existentes:
-        c.execute("ALTER TABLE avances ADD COLUMN fecha_hora_modificacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        c.execute("ALTER TABLE avances ADD COLUMN fecha_hora_modificacion TEXT DEFAULT ''")
     if 'equipo_ip' not in columnas_existentes:
         c.execute("ALTER TABLE avances ADD COLUMN equipo_ip TEXT DEFAULT 'desconocido'")
 
@@ -116,10 +116,11 @@ LISTA_TURNOS = ["Mañana", "Tarde"]
 def guardar_registro(fecha, eess, turno, brigada, responsable, zona, dosis, obs, usuario, ip_equipo):
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
+    fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute('''
-        INSERT INTO avances (fecha, eess, turno, brigada, responsable, zona, dosis, observaciones, usuario_registro, equipo_ip)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (fecha, eess, turno, brigada, responsable, zona, dosis, obs, usuario, ip_equipo))
+        INSERT INTO avances (fecha, eess, turno, brigada, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (fecha, eess, turno, brigada, responsable, zona, dosis, obs, usuario, fecha_hora_actual, ip_equipo))
     conn.commit()
     conn.close()
 
