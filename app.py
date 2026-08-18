@@ -47,12 +47,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BASE DE DATOS Y AUDITORÍA
+# 2. BASE DE DATOS, MIGRACIÓN Y AUDITORÍA
 # ==========================================
 def init_db():
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
-    # Tabla de registros con campos de auditoria
+    
+    # Crear tabla de registros si no existe
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +70,18 @@ def init_db():
             equipo_ip TEXT
         )
     ''')
+    
+    # MIGRACIÓN AUTOMÁTICA: Agregar columnas si la tabla ya existía con la versión antigua
+    c.execute("PRAGMA table_info(avances)")
+    columnas_existentes = [columna[1] for columna in c.fetchall()]
+    
+    if 'usuario_registro' not in columnas_existentes:
+        c.execute("ALTER TABLE avances ADD COLUMN usuario_registro TEXT DEFAULT 'desconocido'")
+    if 'fecha_hora_modificacion' not in columnas_existentes:
+        c.execute("ALTER TABLE avances ADD COLUMN fecha_hora_modificacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    if 'equipo_ip' not in columnas_existentes:
+        c.execute("ALTER TABLE avances ADD COLUMN equipo_ip TEXT DEFAULT 'desconocido'")
+
     # Tabla de metas por EESS
     c.execute('''
         CREATE TABLE IF NOT EXISTS metas (
@@ -76,6 +89,7 @@ def init_db():
             meta_canes INTEGER
         )
     ''')
+    
     conn.commit()
     conn.close()
 
