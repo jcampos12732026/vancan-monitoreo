@@ -72,75 +72,40 @@ with col_titulo:
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. METAS PREDETERMINADAS Y BASE DE DATOS
+# 2. LECTURA DE ARCHIVOS CSV (PERSONAL, ZONAS Y METAS)
 # ==========================================
-METAS_PREDETERMINADAS = {
-    "C.S. César López Silva": 3500,
-    "C.S. Ñaña": 2200,
-    "C.S. Morón": 2800,
-    "C.S. Chosica": 4000
-}
 
-# Lista predeterminada de brigadas del 1 al 10
-LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 11)]
+# Carga de Personal desde PERSONAL.csv (NOMBRE, DNI)
+def obtener_personal():
+    archivos_posibles = ['PERSONAL.csv', 'personal.csv', 'Personal.csv']
+    for archivo in archivos_posibles:
+        if os.path.exists(archivo):
+            try:
+                try:
+                    df_p = pd.read_csv(archivo, encoding='utf-8')
+                except UnicodeDecodeError:
+                    df_p = pd.read_csv(archivo, encoding='latin1')
 
-def init_db():
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    
-    # Tabla de avances de vacunación
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS avances (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT,
-            eess TEXT,
-            turno TEXT,
-            brigada TEXT,
-            integrantes TEXT,
-            responsable TEXT,
-            zona TEXT,
-            dosis INTEGER,
-            observaciones TEXT,
-            usuario_registro TEXT,
-            fecha_hora_modificacion TEXT,
-            equipo_ip TEXT
-        )
-    ''')
-    
-    # Verificación/Migración de columnas
-    c.execute("PRAGMA table_info(avances)")
-    cols = [col[1] for col in c.fetchall()]
-    if 'integrantes' not in cols:
-        c.execute("ALTER TABLE avances ADD COLUMN integrantes TEXT DEFAULT ''")
-    if 'usuario_registro' not in cols:
-        c.execute("ALTER TABLE avances ADD COLUMN usuario_registro TEXT DEFAULT 'desconocido'")
-    if 'fecha_hora_modificacion' not in cols:
-        c.execute("ALTER TABLE avances ADD COLUMN fecha_hora_modificacion TEXT DEFAULT ''")
-    if 'equipo_ip' not in cols:
-        c.execute("ALTER TABLE avances ADD COLUMN equipo_ip TEXT DEFAULT 'desconocido'")
+                col_nombre = None
+                for c in df_p.columns:
+                    if str(c).strip().upper() in ['NOMBRE', 'NOMBRES', 'PERSONAL']:
+                        col_nombre = c
+                        break
+                
+                if col_nombre:
+                    nombres = df_p[col_nombre].dropna().unique().tolist()
+                    lista_limpia = sorted([str(n).strip() for n in nombres if str(n).strip() != ''])
+                    if lista_limpia:
+                        return lista_limpia
+            except Exception as e:
+                print(f"Error al leer {archivo}: {e}")
+                
+    return ["Lic. Ethel", "Lic. Sara", "Lic. Amanda", "Tec. Angela", "Tec. Violeta", 
+            "Lic. Carlos Mendoza", "Lic. María Torres", "Tec. Juan Pérez", "Tec. Rosa Gómez", "Lic. Ana Ramos"]
 
-    # Tabla de metas manuales por EESS
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS metas (
-            eess TEXT PRIMARY KEY,
-            meta_canes INTEGER
-        )
-    ''')
-    
-    # Pre-alimentación de metas iniciales si la tabla está vacía
-    c.execute("SELECT COUNT(*) FROM metas")
-    if c.fetchone()[0] == 0:
-        for eess_nombre, meta_valor in METAS_PREDETERMINADAS.items():
-            c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_nombre, meta_valor))
-            
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# Lectura dinámica de la lista de zonas desde ZONAS.csv
+# Carga de Zonas desde ZONAS.csv
 def obtener_zonas():
-    archivos_posibles = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv', 'ZONAS']
+    archivos_posibles = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv']
     for archivo in archivos_posibles:
         if os.path.exists(archivo):
             try:
@@ -167,15 +132,95 @@ def obtener_zonas():
                 
     return ["Sector Central", "Ñaña", "Huascata", "Los Cedros", "Santa Inés", "Ocharán", "Carapongo"]
 
+# Carga de Metas desde METAS.csv
+METAS_PREDETERMINADAS_DEFAULT = {
+    "C.S. César López Silva": 1400,
+    "C.S. Ñaña": 2200,
+    "C.S. Morón": 2800,
+    "C.S. Chosica": 4000
+}
+
+def obtener_metas_csv():
+    metas_dict = METAS_PREDETERMINADAS_DEFAULT.copy()
+    archivos_posibles = ['METAS.csv', 'metas.csv', 'Metas.csv']
+    for archivo in archivos_posibles:
+        if os.path.exists(archivo):
+            try:
+                try:
+                    df_m = pd.read_csv(archivo, encoding='utf-8')
+                except UnicodeDecodeError:
+                    df_m = pd.read_csv(archivo, encoding='latin1')
+
+                col_eess = None
+                col_meta = None
+                for c in df_m.columns:
+                    c_upper = str(c).strip().upper()
+                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTO_SALUD']:
+                        col_eess = c
+                    elif c_upper in ['META_CANES', 'META', 'DOSIS', 'CANES']:
+                        col_meta = c
+
+                if col_eess and col_meta:
+                    for _, row in df_m.iterrows():
+                        eess_nom = str(row[col_eess]).strip()
+                        try:
+                            meta_val = int(row[col_meta])
+                            metas_dict[eess_nom] = meta_val
+                        except ValueError:
+                            pass
+            except Exception as e:
+                print(f"Error al leer {archivo}: {e}")
+    return metas_dict
+
+METAS_PREDETERMINADAS = obtener_metas_csv()
+LISTA_PERSONAL = obtener_personal()
 LISTA_ZONAS = obtener_zonas()
 LISTA_EESS = list(METAS_PREDETERMINADAS.keys())
 LISTA_TURNOS = ["Mañana", "Tarde"]
+LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 11)]
 
-LISTA_PERSONAL = [
-    "Lic. Ethel", "Lic. Sara", "Lic. Amanda", 
-    "Tec. Angela", "Tec. Violeta", "Lic. Carlos Mendoza", 
-    "Lic. María Torres", "Tec. Juan Pérez", "Tec. Rosa Gómez", "Lic. Ana Ramos"
-]
+# ==========================================
+# 3. BASE DE DATOS E INICIALIZACIÓN
+# ==========================================
+def init_db():
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS avances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            eess TEXT,
+            turno TEXT,
+            brigada TEXT,
+            integrantes TEXT,
+            responsable TEXT,
+            zona TEXT,
+            dosis INTEGER,
+            observaciones TEXT,
+            usuario_registro TEXT,
+            fecha_hora_modificacion TEXT,
+            equipo_ip TEXT
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS metas (
+            eess TEXT PRIMARY KEY,
+            meta_canes INTEGER
+        )
+    ''')
+    
+    # Pre-alimentación de metas iniciales
+    c.execute("SELECT COUNT(*) FROM metas")
+    if c.fetchone()[0] == 0:
+        for eess_nombre, meta_valor in METAS_PREDETERMINADAS.items():
+            c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_nombre, meta_valor))
+            
+    conn.commit()
+    conn.close()
+
+init_db()
 
 def guardar_registro(fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, obs, usuario, ip_equipo):
     conn = sqlite3.connect('vancan_data.db')
@@ -235,7 +280,7 @@ def get_remote_ip():
         return "Web Client"
 
 # ==========================================
-# 3. CONTROL DE ACCESO (LOGIN)
+# 4. CONTROL DE ACCESO (LOGIN)
 # ==========================================
 USUARIOS = {
     "brigada": {"pass": "vancan2026", "rol": "Brigadista / Digitador"},
@@ -271,11 +316,12 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 4. NAVEGACIÓN Y SIDEBAR
+# 5. NAVEGACIÓN Y SIDEBAR
 # ==========================================
 st.sidebar.markdown(f"**Usuario:** `{st.session_state['username']}`")
 st.sidebar.markdown(f"**Rol:** `{st.session_state['user_role']}`")
-st.sidebar.markdown(f"**Zonas Cargadas (ZONAS):** `{len(LISTA_ZONAS)}`")
+st.sidebar.markdown(f"**Personal Cargado:** `{len(LISTA_PERSONAL)}`")
+st.sidebar.markdown(f"**Zonas Cargadas:** `{len(LISTA_ZONAS)}`")
 st.sidebar.markdown("---")
 
 opciones = []
@@ -306,19 +352,19 @@ if opcion == "📝 Registrar Avance Diario":
             fecha = st.date_input("Fecha de Intervención", datetime.now())
             eess = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
             turno = st.selectbox("Turno", LISTA_TURNOS)
-            
-            # SELECCIÓN PREDETERMINADA DE BRIGADA (01 al 10)
             brigada = st.selectbox("Seleccionar Brigada", LISTA_BRIGADAS)
             
+            # RESTRICCIÓN DE MÁXIMO 2 SELECCIONES POR BRIGADA
             integrantes_sel = st.multiselect(
-                "Integrantes de la Brigada (Conformación del día)",
+                "Integrantes de la Brigada (Máximo 2 personas)",
                 options=LISTA_PERSONAL,
-                help="Selecciona las personas que conforman esta brigada hoy"
+                max_selections=2,
+                help="Selecciona hasta 2 personas para dividir en partes iguales la vacunación"
             )
         
         with col2:
             responsable = st.text_input("Responsable del Registro", placeholder="Ej. Lic. Carlos Mendoza")
-            zona = st.selectbox("Zona / Lugar (Buscador activo)", LISTA_ZONAS)
+            zona = st.selectbox("Zona / Lugar", LISTA_ZONAS)
             dosis = st.number_input("Canes Vacunados (Dosis)", min_value=0, step=1)
 
         obs = st.text_area("Observaciones o Incidencias")
@@ -327,7 +373,7 @@ if opcion == "📝 Registrar Avance Diario":
 
         if btn_guardar:
             if not responsable or not integrantes_sel:
-                st.warning("⚠️ Debes ingresar el responsable e integrantes de la brigada.")
+                st.warning("⚠️ Debes ingresar el responsable e integrantes de la brigada (mínimo 1, máximo 2).")
             else:
                 ip_cli = get_remote_ip()
                 guardar_registro(str(fecha), eess, turno, brigada, integrantes_sel, responsable, zona, int(dosis), obs, st.session_state["username"], ip_cli)
@@ -345,7 +391,6 @@ if opcion == "📝 Registrar Avance Diario":
             df_mostrar = df_all.copy()
 
         if not df_mostrar.empty:
-            # Editor interactivo de datos
             df_edited = st.data_editor(
                 df_mostrar,
                 column_config={
@@ -457,6 +502,48 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         st.markdown("---")
 
+        # CÁLCULO DE PRODUCCIÓN POR PERSONA (DIVISIÓN EN PARTES IGUALES POR BRIGADA)
+        prod_por_persona = {}
+        
+        for _, row in df_f.iterrows():
+            dosis_total = float(row['dosis'])
+            raw_integrantes = str(row['integrantes'])
+            
+            # Limpieza y separación de integrantes
+            lista_int = [i.strip() for i in raw_integrantes.split(',') if i.strip() != '']
+            cant_int = len(lista_int)
+            
+            if cant_int > 0:
+                dosis_individual = dosis_total / cant_int
+                for persona in lista_int:
+                    prod_por_persona[persona] = prod_por_persona.get(persona, 0.0) + dosis_individual
+
+        # SECCIÓN DE RANKING DE PRODUCCIÓN ACUMULADA POR PERSONAL
+        st.subheader("🏆 Ranking de Producción por Personal (Producción Acumulada)")
+        st.caption("Las dosis de la brigada son divididas en partes iguales (50/50) entre sus integrantes para calcular la producción individual de cada vacunador.")
+
+        if prod_por_persona:
+            df_prod = pd.DataFrame(list(prod_por_persona.items()), columns=['Personal', 'Dosis Acumuladas'])
+            df_prod['Dosis Acumuladas'] = df_prod['Dosis Acumuladas'].round(1)
+            df_prod = df_prod.sort_values(by='Dosis Acumuladas', ascending=True)
+
+            fig_prod = px.bar(
+                df_prod,
+                x='Dosis Acumuladas',
+                y='Personal',
+                orientation='h',
+                text='Dosis Acumuladas',
+                color='Dosis Acumuladas',
+                color_continuous_scale='Blues',
+                title="Producción Individual Acumulada por Integrante de Salud"
+            )
+            fig_prod.update_layout(height=max(350, len(df_prod)*30), showlegend=False)
+            st.plotly_chart(fig_prod, use_container_width=True)
+        else:
+            st.info("No hay datos de integrantes para generar el ranking de producción.")
+
+        st.markdown("---")
+
         st.subheader("📈 Avance Diario y Progreso Acumulado de Vacunación")
         
         df_f['fecha'] = pd.to_datetime(df_f['fecha'])
@@ -537,7 +624,7 @@ elif opcion == "🎯 Configuración Manual de Metas":
         st.subheader("✍️ Registro Manual Individual")
         with st.form("form_metas"):
             eess_m = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
-            meta_val = st.number_input("Meta de Canes (Número entero)", min_value=1, value=1000, step=50)
+            meta_val = st.number_input("Meta de Canes (Número entero)", min_value=1, value=1400, step=50)
             btn_m = st.form_submit_button("💾 Guardar / Actualizar Meta", type="primary")
 
             if btn_m:
