@@ -16,7 +16,35 @@ st.set_page_config(
     layout="wide"
 )
 
-# LISTAS BASE DE OPCIONES (Cargadas de CSVs o Fallbacks)
+# ==========================================
+# CARGA DE ARCHIVO PERSONAL.CSV (NOMBRES)
+# ==========================================
+def cargar_personal_csv():
+    """Lee el archivo PERSONAL.csv o personal.csv soportando delimitador ';' y ','"""
+    archivos_personal = ['PERSONAL.csv', 'personal.csv', 'Personal.csv', 'PERSONAL.CSV']
+    for archivo in archivos_personal:
+        if os.path.exists(archivo):
+            try:
+                # Intentar leer primero con separador ';'
+                df = pd.read_csv(archivo, sep=';', encoding='utf-8')
+                if 'NOMBRES' not in df.columns:
+                    df = pd.read_csv(archivo, sep=',', encoding='utf-8')
+                
+                if 'NOMBRES' in df.columns:
+                    return df['NOMBRES'].dropna().astype(str).tolist()
+            except Exception:
+                try:
+                    df = pd.read_csv(archivo, sep=';', encoding='latin1')
+                    if 'NOMBRES' in df.columns:
+                        return df['NOMBRES'].dropna().astype(str).tolist()
+                except Exception as e:
+                    print(f"Error al leer {archivo}: {e}")
+    # Fallback por si no existe el archivo aún
+    return ["Tec. Jorge Campos", "Lic. Jorge Vasquez", "Tec. Marina Galan", "Tec. Jhosi Soto", "Tec. Trinidad Jara"]
+
+LISTA_PERSONAL = cargar_personal_csv()
+
+# LISTAS BASE DE OPCIONES
 LISTA_EESS = ["C.S. CESAR LOEPZ SILVA", "C.S. NAÑA", "C.S. MORON", "C.S. CHOSICA"]
 LISTA_ZONAS = [
     "ROBLES", "ROCAS", "ROSALEDA", "ROSARIO", "ROSAS", 
@@ -27,10 +55,10 @@ LISTA_TURNOS = ["Mañana", "Tarde"]
 LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 21)]
 
 # ==========================================
-# FUNCIONES AUXILIARES DE NORMALIZACIÓN Y BASE DE DATOS
+# FUNCIONES AUXILIARES Y BASE DE DATOS
 # ==========================================
 def normalizar_texto(texto):
-    """Limpia tildes, caracteres especiales y convierte a mayúsculas para comparar fácilmente"""
+    """Limpia tildes, caracteres especiales y convierte a mayúsculas"""
     if not texto:
         return ""
     texto = str(texto).upper().strip()
@@ -75,21 +103,18 @@ def init_db():
 init_db()
 
 def cargar_datos():
-    """Carga los datos guardados en la base de datos"""
     conn = sqlite3.connect('vancan_data.db')
     df = pd.read_sql_query("SELECT * FROM avances ORDER BY id ASC", conn)
     conn.close()
     return df
 
 def cargar_metas():
-    """Carga las metas registradas manualmente en la DB"""
     conn = sqlite3.connect('vancan_data.db')
     df = pd.read_sql_query("SELECT * FROM metas", conn)
     conn.close()
     return df
 
 def guardar_avance_db(fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro):
-    """Inserta un nuevo registro de avance"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -102,7 +127,6 @@ def guardar_avance_db(fecha, eess, turno, brigada, integrantes, responsable, zon
     conn.close()
 
 def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones):
-    """Actualiza un registro editado en la tabla"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -115,7 +139,6 @@ def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrantes, res
     conn.close()
 
 def reordenar_ids_db():
-    """Reordena correlativamente los IDs en la base de datos para no dejar huecos numéricos"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     c.execute("CREATE TABLE avances_seq AS SELECT * FROM avances ORDER BY id ASC;")
@@ -131,7 +154,6 @@ def reordenar_ids_db():
     conn.close()
 
 def eliminar_registro_db(id_reg):
-    """Elimina un registro específico por ID y reordena numéricamente los restantes"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     c.execute("DELETE FROM avances WHERE id=?", (id_reg,))
@@ -140,7 +162,6 @@ def eliminar_registro_db(id_reg):
     reordenar_ids_db()
 
 def vaciar_base_datos_db():
-    """Elimina TODOS los registros y reinicia el autoincremento de IDs a 1"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     c.execute("DELETE FROM avances")
@@ -149,7 +170,6 @@ def vaciar_base_datos_db():
     conn.close()
 
 def obtener_metas_csv():
-    """Busca las metas desde archivos CSV locales con valores por defecto"""
     metas_dict = {
         "CS CESAR LOPEZ SILVA": 1400,
         "CS NANA": 2200,
@@ -188,7 +208,6 @@ def obtener_metas_csv():
     return metas_dict
 
 def obtener_meta_establecimiento(eess_nombre, mapa_metas):
-    """Busca la meta de un EESS tolerando typos de escritura como 'LOEPZ' por 'LOPEZ'"""
     eess_norm = normalizar_texto(eess_nombre)
     
     if eess_norm in mapa_metas:
@@ -246,19 +265,32 @@ if opcion == "📝 Registrar Avance Diario":
 
         with col3:
             dosis_input = st.number_input("Dosis Aplicadas (Canes)", min_value=0, step=1, value=50)
-            integrantes_input = st.text_input("Integrantes (Separados por coma)", value="Tec. Angela, Lic. Ethel")
+            
+            # SELECCIÓN MÚLTIPLE DE HASTA 2 INTEGRANTES DESDE PERSONAL.CSV
+            integrantes_sel = st.multiselect(
+                "Integrantes (PERSONAL.CSV - Máximo 2)", 
+                options=LISTA_PERSONAL,
+                default=LISTA_PERSONAL[:2] if len(LISTA_PERSONAL) >= 2 else LISTA_PERSONAL,
+                max_selections=2,
+                help="Selecciona hasta 2 integrantes leídos desde PERSONAL.CSV"
+            )
+            
             observaciones_input = st.text_area("Observaciones", value="")
 
         btn_guardar = st.form_submit_button("💾 Guardar Registro de Avance", type="primary", use_container_width=True)
 
         if btn_guardar:
-            guardar_avance_db(
-                fecha_input, eess_input, turno_input, brigada_input, 
-                integrantes_input, responsable_input, zona_input, 
-                dosis_input, observaciones_input, st.session_state["username"]
-            )
-            st.success("✅ Registro guardado con éxito.")
-            st.rerun()
+            if not integrantes_sel:
+                st.error("⚠️ Debes seleccionar al menos un integrante de la lista.")
+            else:
+                integrantes_str = ", ".join(integrantes_sel)
+                guardar_avance_db(
+                    fecha_input, eess_input, turno_input, brigada_input, 
+                    integrantes_str, responsable_input, zona_input, 
+                    dosis_input, observaciones_input, st.session_state["username"]
+                )
+                st.success(f"✅ Registro guardado con exito. Integrantes: {integrantes_str}")
+                st.rerun()
 
     st.markdown("---")
     st.subheader("📋 Gestión y Edición de Registros Guardados")
@@ -272,11 +304,9 @@ if opcion == "📝 Registrar Avance Diario":
             df_mostrar = df_all.copy()
 
         if not df_mostrar.empty:
-            # Convertir columna fecha a datetime para evitar incompatibilidad de tipos en DateColumn
             if "fecha" in df_mostrar.columns:
                 df_mostrar["fecha"] = pd.to_datetime(df_mostrar["fecha"], errors='coerce')
 
-            # 1. ORDEN DE COLUMNAS (Integrantes va después de Dosis)
             columnas_ordenadas = [
                 "id", "fecha", "eess", "turno", "brigada", 
                 "responsable", "zona", "dosis", "integrantes", 
@@ -286,13 +316,11 @@ if opcion == "📝 Registrar Avance Diario":
             cols_presentes = [c for c in columnas_ordenadas if c in df_mostrar.columns]
             df_mostrar = df_mostrar[cols_presentes]
 
-            # OPCIONES DINÁMICAS (Conserva las listas predeterminadas + cualquier valor que ya exista en la DB)
             opts_eess = sorted(list(set(LISTA_EESS + df_mostrar['eess'].dropna().astype(str).tolist())))
             opts_turno = sorted(list(set(LISTA_TURNOS + df_mostrar['turno'].dropna().astype(str).tolist())))
             opts_brigada = sorted(list(set(LISTA_BRIGADAS + df_mostrar['brigada'].dropna().astype(str).tolist())))
             opts_zona = sorted(list(set(LISTA_ZONAS + df_mostrar['zona'].dropna().astype(str).tolist())))
 
-            # 3. EDITOR CON OPCIONES DINÁMICAS (Soluciona el error StreamlitAPIException)
             df_edited = st.data_editor(
                 df_mostrar,
                 column_config={
@@ -318,7 +346,6 @@ if opcion == "📝 Registrar Avance Diario":
 
             col_a, col_b = st.columns([1, 1])
             
-            # GUARDAR CAMBIOS EDITADOS EN LA TABLA
             with col_a:
                 if st.button("💾 Guardar Cambios Editados", type="primary", use_container_width=True):
                     for _, row in df_edited.iterrows():
@@ -330,7 +357,6 @@ if opcion == "📝 Registrar Avance Diario":
                     st.success("✅ Cambios actualizados correctamente en la base de datos.")
                     st.rerun()
 
-            # 2. SECCIÓN DE ELIMINACIÓN Y VACIADO TOTAL (RESET A 0 CON REORDENAMIENTO DE IDs)
             with col_b:
                 with st.expander("🗑️ Opciones de Eliminación / Limpieza de Registros"):
                     modo_eliminar = st.radio(
@@ -405,7 +431,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
     zona_sel = f2.multiselect("Zona de Intervención", zonas_disponibles, default=zonas_disponibles)
     turno_sel = f3.multiselect("Turno", turnos_disponibles, default=turnos_disponibles)
 
-    # Filtrado de Avances
     if not df.empty:
         df_f = df[(df['eess'].isin(eess_sel)) & (df['zona'].isin(zona_sel)) & (df['turno'].isin(turno_sel))]
         total_vacunados = pd.to_numeric(df_f['dosis'], errors='coerce').fillna(0).sum()
@@ -413,7 +438,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         df_f = pd.DataFrame()
         total_vacunados = 0
 
-    # CÁLCULO DE META CON BÚSQUEDA TOLERANTE A TYPOS
     meta_filtrada = sum([obtener_meta_establecimiento(e, mapa_metas) for e in eess_sel])
     pct_avance = (total_vacunados / meta_filtrada * 100) if meta_filtrada > 0 else 0.0
 
@@ -428,7 +452,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         st.metric("% Cobertura Alcanzado", f"{pct_avance:.1f} %")
 
     with c_vac2:
-        # ENCABEZADO MEJORADO Y ESPACIADO
         st.markdown("<h4 style='text-align: center; color: #003366; margin-bottom: 0px;'>🎯 Avance vs Meta Programada</h4>", unsafe_allow_html=True)
         
         fig_gauge = go.Figure(go.Indicator(
