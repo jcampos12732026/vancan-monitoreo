@@ -272,7 +272,11 @@ if opcion == "📝 Registrar Avance Diario":
             df_mostrar = df_all.copy()
 
         if not df_mostrar.empty:
-            # 1. ORDEN DE COLUMNAS SOLICITADO (Integrantes va después de Dosis)
+            # Convertir columna fecha a datetime para evitar incompatibilidad de tipos en DateColumn
+            if "fecha" in df_mostrar.columns:
+                df_mostrar["fecha"] = pd.to_datetime(df_mostrar["fecha"], errors='coerce')
+
+            # 1. ORDEN DE COLUMNAS (Integrantes va después de Dosis)
             columnas_ordenadas = [
                 "id", "fecha", "eess", "turno", "brigada", 
                 "responsable", "zona", "dosis", "integrantes", 
@@ -282,16 +286,22 @@ if opcion == "📝 Registrar Avance Diario":
             cols_presentes = [c for c in columnas_ordenadas if c in df_mostrar.columns]
             df_mostrar = df_mostrar[cols_presentes]
 
-            # 3. EDITOR CON VÍNCULO A LAS LISTAS DE LOS CSVs
+            # OPCIONES DINÁMICAS (Conserva las listas predeterminadas + cualquier valor que ya exista en la DB)
+            opts_eess = sorted(list(set(LISTA_EESS + df_mostrar['eess'].dropna().astype(str).tolist())))
+            opts_turno = sorted(list(set(LISTA_TURNOS + df_mostrar['turno'].dropna().astype(str).tolist())))
+            opts_brigada = sorted(list(set(LISTA_BRIGADAS + df_mostrar['brigada'].dropna().astype(str).tolist())))
+            opts_zona = sorted(list(set(LISTA_ZONAS + df_mostrar['zona'].dropna().astype(str).tolist())))
+
+            # 3. EDITOR CON OPCIONES DINÁMICAS (Soluciona el error StreamlitAPIException)
             df_edited = st.data_editor(
                 df_mostrar,
                 column_config={
                     "id": st.column_config.NumberColumn("ID", disabled=True),
                     "fecha": st.column_config.DateColumn("Fecha", required=True),
-                    "eess": st.column_config.SelectboxColumn("EESS", options=LISTA_EESS, required=True),
-                    "turno": st.column_config.SelectboxColumn("Turno", options=LISTA_TURNOS, required=True),
-                    "brigada": st.column_config.SelectboxColumn("Brigada", options=LISTA_BRIGADAS, required=True),
-                    "zona": st.column_config.SelectboxColumn("Zona / Lugar", options=LISTA_ZONAS, required=True),
+                    "eess": st.column_config.SelectboxColumn("EESS", options=opts_eess, required=True),
+                    "turno": st.column_config.SelectboxColumn("Turno", options=opts_turno, required=True),
+                    "brigada": st.column_config.SelectboxColumn("Brigada", options=opts_brigada, required=True),
+                    "zona": st.column_config.SelectboxColumn("Zona / Lugar", options=opts_zona, required=True),
                     "dosis": st.column_config.NumberColumn("Dosis", min_value=0, step=1, required=True),
                     "integrantes": st.column_config.TextColumn(
                         "Integrantes (PERSONAL.csv)", 
