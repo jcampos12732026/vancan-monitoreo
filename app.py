@@ -26,13 +26,6 @@ st.markdown("""
         border-radius: 8px;
         margin-bottom: 25px;
     }
-    .kpi-card {
-        background-color: #F8F9FA;
-        border-left: 5px solid #003366;
-        padding: 15px;
-        border-radius: 5px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
     .stButton>button {
         background-color: #003366;
         color: white;
@@ -127,6 +120,13 @@ def cargar_datos():
     conn = sqlite3.connect('vancan_data.db')
     df = pd.read_sql_query("SELECT * FROM avances", conn)
     conn.close()
+    
+    # Garantizar que las columnas de auditoría existan en el DataFrame sin lanzar KeyError
+    columnas_esperadas = ['usuario_registro', 'fecha_hora_modificacion', 'equipo_ip', 'dosis', 'eess', 'zona', 'turno']
+    for col in columnas_esperadas:
+        if col not in df.columns:
+            df[col] = '' if col != 'dosis' else 0
+
     return df
 
 def cargar_metas():
@@ -232,7 +232,10 @@ if opcion == "📝 Registrar Avance Diario":
     df_all = cargar_datos()
     if not df_all.empty:
         df_propios = df_all[df_all['usuario_registro'] == st.session_state["username"]]
-        st.dataframe(df_propios[['fecha', 'eess', 'turno', 'brigada', 'zona', 'dosis', 'fecha_hora_modificacion']], use_container_width=True)
+        cols_mostrar = [c for c in ['fecha', 'eess', 'turno', 'brigada', 'zona', 'dosis', 'fecha_hora_modificacion'] if c in df_propios.columns]
+        st.dataframe(df_propios[cols_mostrar], use_container_width=True)
+    else:
+        st.info("Aún no se registran datos en esta sesión.")
 
 # ==========================================
 # MÓDULO 2: DASHBOARD Y VACUNÓMETRO
@@ -255,7 +258,7 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         df_f = df[(df['eess'].isin(eess_sel)) & (df['zona'].isin(zona_sel)) & (df['turno'].isin(turno_sel))]
 
-        total_vacunados = df_f['dosis'].sum()
+        total_vacunados = pd.to_numeric(df_f['dosis'], errors='coerce').fillna(0).sum()
 
         # Cálculo de Meta Total según filtro de EESS
         if not df_metas.empty:
@@ -272,8 +275,8 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         
         with c_vac1:
             st.markdown("### 💉 Vacunómetro de Avance")
-            st.metric("Total Vacunados", f"{total_vacunados:,} canes")
-            st.metric("Meta Establecida", f"{meta_filtrada:,} canes")
+            st.metric("Total Vacunados", f"{int(total_vacunados):,} canes")
+            st.metric("Meta Establecida", f"{int(meta_filtrada):,} canes")
             st.metric("% de Cobertura Alcanzado", f"{pct_avance:.1f} %")
 
         with c_vac2:
