@@ -16,7 +16,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilos CSS
+# Estilos CSS con colores institucionales MINSA
 st.markdown("""
     <style>
     .main-header {
@@ -52,7 +52,6 @@ st.markdown("""
 col_logo, col_titulo = st.columns([1, 4])
 
 with col_logo:
-    # Busca 'logo.png', 'logo.jpg' o 'logo.jpeg' en la raíz del proyecto
     logo_path = None
     for ext in ['logo.png', 'logo.jpg', 'logo.jpeg', 'LOGO.PNG', 'LOGO.JPG']:
         if os.path.exists(ext):
@@ -73,12 +72,20 @@ with col_titulo:
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BASE DE DATOS Y CARGA DE ARCHIVOS
+# 2. METAS PREDETERMINADAS Y BASE DE DATOS
 # ==========================================
+METAS_PREDETERMINADAS = {
+    "C.S. César López Silva": 3500,
+    "C.S. Ñaña": 2200,
+    "C.S. Morón": 2800,
+    "C.S. Chosica": 4000
+}
+
 def init_db():
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     
+    # Tabla de avances de vacunación
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +104,7 @@ def init_db():
         )
     ''')
     
-    # Migración de columna 'integrantes' si el archivo sqlite es existente
+    # Verificación/Migración de columnas
     c.execute("PRAGMA table_info(avances)")
     cols = [col[1] for col in c.fetchall()]
     if 'integrantes' not in cols:
@@ -117,12 +124,18 @@ def init_db():
         )
     ''')
     
+    # Pre-alimentación de metas iniciales si la tabla está vacía
+    c.execute("SELECT COUNT(*) FROM metas")
+    if c.fetchone()[0] == 0:
+        for eess_nombre, meta_valor in METAS_PREDETERMINADAS.items():
+            c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_nombre, meta_valor))
+            
     conn.commit()
     conn.close()
 
 init_db()
 
-# Carga de lista de Zonas desde ZONAS.csv
+# Lectura dinámica de la lista de zonas desde ZONAS.csv
 def obtener_zonas():
     archivos_posibles = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv', 'ZONAS']
     for archivo in archivos_posibles:
@@ -152,10 +165,9 @@ def obtener_zonas():
     return ["Sector Central", "Ñaña", "Huascata", "Los Cedros", "Santa Inés", "Ocharán", "Carapongo"]
 
 LISTA_ZONAS = obtener_zonas()
-LISTA_EESS = ["C.S. César López Silva", "C.S. Ñaña", "C.S. Morón", "C.S. Chosica"]
+LISTA_EESS = list(METAS_PREDETERMINADAS.keys())
 LISTA_TURNOS = ["Mañana", "Tarde"]
 
-# Lista predefinida de personal para la conformación de brigadas
 LISTA_PERSONAL = [
     "Lic. Ethel", "Lic. Sara", "Lic. Amanda", 
     "Tec. Angela", "Tec. Violeta", "Lic. Carlos Mendoza", 
@@ -229,7 +241,6 @@ if not st.session_state["logged_in"]:
             else:
                 st.error("Usuario o contraseña incorrecta")
 
-    # Pie de página en el login
     st.markdown("""
         <div class="footer-text">
             Elaborado por Servicio de Enfermería del C.S. César López Silva / RIS Chaclacayo Chosica / DIRIS Lima Este / MINSA PERÚ
@@ -275,7 +286,6 @@ if opcion == "📝 Registrar Avance Diario":
             turno = st.selectbox("Turno", LISTA_TURNOS)
             brigada = st.text_input("Código de Brigada", placeholder="Ej. Brigada 01")
             
-            # Selección múltiple de integrantes del personal
             integrantes_sel = st.multiselect(
                 "Integrantes de la Brigada (Conformación del día)",
                 options=LISTA_PERSONAL,
@@ -333,10 +343,15 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         total_vacunados = pd.to_numeric(df_f['dosis'], errors='coerce').fillna(0).sum()
 
+        # Cálculo de Meta Total
         if not df_metas.empty:
-            meta_filtrada = df_metas[df_metas['eess'].isin(eess_sel)]['meta_canes'].sum()
+            df_metas_filtradas = df_metas[df_metas['eess'].isin(eess_sel)]
+            meta_filtrada = df_metas_filtradas['meta_canes'].sum()
         else:
             meta_filtrada = 0
+
+        if meta_filtrada == 0:
+            meta_filtrada = sum([METAS_PREDETERMINADAS.get(e, 1000) for e in eess_sel])
 
         pct_avance = (total_vacunados / meta_filtrada * 100) if meta_filtrada > 0 else 0.0
 
@@ -348,15 +363,15 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         with c_vac1:
             st.markdown("### 💉 Vacunómetro de Avance")
             st.metric("Total Vacunados", f"{int(total_vacunados):,} canes")
-            st.metric("Meta Manual Total", f"{int(meta_filtrada):,} canes" if meta_filtrada > 0 else "Sin Meta Definida")
-            st.metric("% Cobertura Alcanzado", f"{pct_avance:.1f} %" if meta_filtrada > 0 else "N/A")
+            st.metric("Meta Programada Total", f"{int(meta_filtrada):,} canes")
+            st.metric("% Cobertura Alcanzado", f"{pct_avance:.1f} %")
 
         with c_vac2:
             fig_gauge = go.Figure(go.Indicator(
                 mode = "gauge+number+delta",
                 value = total_vacunados,
                 domain = {'x': [0, 1], 'y': [0, 1]},
-                title = {'text': "Avance vs Meta Manual Asignada", 'font': {'size': 18}},
+                title = {'text': "Avance vs Meta Programada", 'font': {'size': 18}},
                 delta = {'reference': meta_filtrada, 'increasing': {'color': "green"}},
                 gauge = {
                     'axis': {'range': [None, max(meta_filtrada, total_vacunados if total_vacunados>0 else 100)]},
@@ -387,7 +402,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         fig_comb = make_subplots(specs=[[{"secondary_y": True}]])
 
-        # Barras: Avance Diario
         fig_comb.add_trace(
             go.Bar(
                 x=df_diario['fecha'].dt.strftime('%Y-%m-%d'),
@@ -400,7 +414,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
             secondary_y=False
         )
 
-        # Línea: Progreso Acumulado
         fig_comb.add_trace(
             go.Scatter(
                 x=df_diario['fecha'].dt.strftime('%Y-%m-%d'),
@@ -428,7 +441,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         st.markdown("---")
 
-        # Gráficos por Zonas y Brigadas
         g1, g2 = st.columns(2)
 
         with g1:
@@ -453,12 +465,13 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 # MÓDULO 3: CONFIGURACIÓN MANUAL DE METAS
 # ==========================================
 elif opcion == "🎯 Configuración Manual de Metas":
-    st.header("🎯 Definición Manual de Metas por Establecimiento")
-    st.info("Ingreso exclusivo por el Coordinador/Administrador.")
+    st.header("🎯 Definición y Gestión de Metas por Establecimiento")
+    st.info("Configura individualmente o sube masivamente las metas asignadas a los Establecimientos de Salud.")
 
     col_form, col_tabla = st.columns([1, 1])
 
     with col_form:
+        st.subheader("✍️ Registro Manual Individual")
         with st.form("form_metas"):
             eess_m = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
             meta_val = st.number_input("Meta de Canes (Número entero)", min_value=1, value=1000, step=50)
@@ -468,6 +481,22 @@ elif opcion == "🎯 Configuración Manual de Metas":
                 guardar_meta(eess_m, meta_val)
                 st.success(f"✅ Meta de {meta_val:,} canes registrada para {eess_m}")
                 st.rerun()
+
+        st.markdown("---")
+        st.subheader("📁 Carga Masiva mediante Archivo CSV")
+        file_metas = st.file_uploader("Subir archivo METAS.csv", type=["csv"])
+        if file_metas is not None:
+            try:
+                df_up = pd.read_csv(file_metas)
+                if 'eess' in df_up.columns and 'meta_canes' in df_up.columns:
+                    for _, row in df_up.iterrows():
+                        guardar_meta(str(row['eess']).strip(), int(row['meta_canes']))
+                    st.success("✅ Metas cargadas masivamente con éxito.")
+                    st.rerun()
+                else:
+                    st.error("El archivo CSV debe contener las columnas: 'eess' y 'meta_canes'")
+            except Exception as e:
+                st.error(f"Error al procesar el archivo: {e}")
 
     with col_tabla:
         st.subheader("📋 Metas Configuradas Actuales")
