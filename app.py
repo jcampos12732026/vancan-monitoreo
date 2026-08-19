@@ -32,10 +32,80 @@ def normalizar_texto(texto):
     return texto
 
 # ==========================================
-# CARGA DE ARCHIVOS CSV MAESTROS (PERSONAL Y ZONAS)
+# BASE DE DATOS SQLITE (INICIALIZACIÓN)
 # ==========================================
-def cargar_personal_csv():
-    """Lee PERSONAL.csv soportando delimitadores ';' y ','"""
+def init_db():
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    
+    # Tabla de Avances con Integrante 1 e Integrante 2
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS avances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            eess TEXT,
+            turno TEXT,
+            brigada TEXT,
+            integrante_1 TEXT,
+            integrante_2 TEXT,
+            responsable TEXT,
+            zona TEXT,
+            dosis INTEGER,
+            observaciones TEXT,
+            usuario_registro TEXT,
+            fecha_hora_modificacion TEXT,
+            equipo_ip TEXT
+        )
+    ''')
+    
+    # Migración suave si existe la columna antigua 'integrantes'
+    c.execute("PRAGMA table_info(avances)")
+    cols = [col[1] for col in c.fetchall()]
+    if 'integrantes' in cols and 'integrante_1' not in cols:
+        c.execute("ALTER TABLE avances ADD COLUMN integrante_1 TEXT")
+        c.execute("ALTER TABLE avances ADD COLUMN integrante_2 TEXT")
+        c.execute("UPDATE avances SET integrante_1 = integrantes")
+    
+    # Tabla de Metas
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS metas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            eess TEXT UNIQUE,
+            meta_canes INTEGER
+        )
+    ''')
+    
+    # Tabla de Personal Maestro
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS personal_db (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT UNIQUE,
+            dni TEXT
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ==========================================
+# CARGA Y GESTIÓN DE PERSONAL (CSV + DB)
+# ==========================================
+def cargar_personal_completo():
+    """Combina datos de PERSONAL.csv con los registrados en la DB"""
+    personal_set = set()
+    
+    # 1. Desde la base de datos
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute("SELECT nombre FROM personal_db ORDER BY nombre ASC")
+    for row in c.fetchall():
+        if row[0]:
+            personal_set.add(str(row[0]).strip())
+    conn.close()
+
+    # 2. Desde el archivo CSV
     archivos = ['PERSONAL.csv', 'personal.csv', 'Personal.csv', 'PERSONAL.CSV']
     for archivo in archivos:
         if os.path.exists(archivo):
@@ -44,15 +114,19 @@ def cargar_personal_csv():
                 if 'NOMBRES' not in df.columns:
                     df = pd.read_csv(archivo, sep=',', encoding='utf-8')
                 if 'NOMBRES' in df.columns:
-                    return df['NOMBRES'].dropna().astype(str).str.strip().tolist()
+                    for n in df['NOMBRES'].dropna().astype(str).str.strip().tolist():
+                        personal_set.add(n)
             except Exception:
                 try:
                     df = pd.read_csv(archivo, sep=';', encoding='latin1')
                     if 'NOMBRES' in df.columns:
-                        return df['NOMBRES'].dropna().astype(str).str.strip().tolist()
+                        for n in df['NOMBRES'].dropna().astype(str).str.strip().tolist():
+                            personal_set.add(n)
                 except Exception as e:
-                    print(f"Error al leer {archivo}: {e}")
-    return ["Tec. Jorge Campos", "Lic. Jorge Vasquez", "Tec. Marina Galan", "Tec. Jhosi Soto"]
+                    print(f"Error leyendo {archivo}: {e}")
+                    
+    resultado = sorted(list(personal_set))
+    return resultado if resultado else ["Tec. Jorge Campos", "Lic. Jorge Vasquez", "Tec. Marina Galan"]
 
 def cargar_zonas_csv():
     """Lee ZONAS.csv trayendo las +80 zonas dinámicamente"""
@@ -60,7 +134,6 @@ def cargar_zonas_csv():
     for archivo in archivos:
         if os.path.exists(archivo):
             try:
-                # Probar lectura con auto-detección de separador
                 df = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
                 col_target = None
                 for col in df.columns:
@@ -71,8 +144,7 @@ def cargar_zonas_csv():
                     col_target = df.columns[0]
                 
                 if col_target:
-                    zonas_list = df[col_target].dropna().astype(str).str.strip().unique().tolist()
-                    return sorted(zonas_list)
+                    return sorted(df[col_target].dropna().astype(str).str.strip().unique().tolist())
             except Exception:
                 try:
                     df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin1')
@@ -81,50 +153,17 @@ def cargar_zonas_csv():
                 except Exception as e:
                     print(f"Error leyendo {archivo}: {e}")
     
-    # Lista fallback si no encuentra el archivo
     return ["ROBLES", "ROCAS", "ROSALEDA", "ROSARIO", "ROSAS", "SAN BARTOLOME", "SAN JOSE", "SANTA INES"]
 
-LISTA_PERSONAL = cargar_personal_csv()
+LISTA_PERSONAL = cargar_personal_completo()
 LISTA_ZONAS = cargar_zonas_csv()
 LISTA_EESS = ["C.S. CESAR LOEPZ SILVA", "C.S. NAÑA", "C.S. MORON", "C.S. CHOSICA"]
 LISTA_TURNOS = ["Mañana", "Tarde"]
 LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 21)]
 
 # ==========================================
-# BASE DE DATOS SQLITE
+# FUNCIONES SQLITE PARA REGISTROS Y METAS
 # ==========================================
-def init_db():
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS avances (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT,
-            eess TEXT,
-            turno TEXT,
-            brigada TEXT,
-            integrantes TEXT,
-            responsable TEXT,
-            zona TEXT,
-            dosis INTEGER,
-            observaciones TEXT,
-            usuario_registro TEXT,
-            fecha_hora_modificacion TEXT,
-            equipo_ip TEXT
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS metas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            eess TEXT,
-            meta_canes INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
 def cargar_datos():
     conn = sqlite3.connect('vancan_data.db')
     df = pd.read_sql_query("SELECT * FROM avances ORDER BY id ASC", conn)
@@ -133,31 +172,37 @@ def cargar_datos():
 
 def cargar_metas():
     conn = sqlite3.connect('vancan_data.db')
-    df = pd.read_sql_query("SELECT * FROM metas", conn)
+    df = pd.read_sql_query("SELECT * FROM metas ORDER BY id ASC", conn)
     conn.close()
     return df
 
-def guardar_avance_db(fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro):
+def cargar_personal_db():
+    conn = sqlite3.connect('vancan_data.db')
+    df = pd.read_sql_query("SELECT * FROM personal_db ORDER BY id ASC", conn)
+    conn.close()
+    return df
+
+def guardar_avance_db(fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro):
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ip_simulada = "10.14.14.2, 10.16"
     c.execute('''
-        INSERT INTO avances (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (str(fecha), eess, turno, brigada, integrantes, responsable, zona, int(dosis), observaciones, usuario_registro, fecha_mod, ip_simulada))
+        INSERT INTO avances (fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (str(fecha), eess, turno, brigada, integrante_1, integrante_2, responsable, zona, int(dosis), observaciones, usuario_registro, fecha_mod, ip_simulada))
     conn.commit()
     conn.close()
 
-def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones):
+def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones):
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute('''
         UPDATE avances 
-        SET fecha=?, eess=?, turno=?, brigada=?, integrantes=?, responsable=?, zona=?, dosis=?, observaciones=?, fecha_hora_modificacion=?
+        SET fecha=?, eess=?, turno=?, brigada=?, integrante_1=?, integrante_2=?, responsable=?, zona=?, dosis=?, observaciones=?, fecha_hora_modificacion=?
         WHERE id=?
-    ''', (str(fecha), eess, turno, brigada, integrantes, responsable, zona, int(dosis), observaciones, fecha_mod, id_reg))
+    ''', (str(fecha), eess, turno, brigada, integrante_1, integrante_2, responsable, zona, int(dosis), observaciones, fecha_mod, id_reg))
     conn.commit()
     conn.close()
 
@@ -168,8 +213,8 @@ def reordenar_ids_db():
     c.execute("DELETE FROM avances;")
     c.execute("DELETE FROM sqlite_sequence WHERE name='avances';")
     c.execute('''
-        INSERT INTO avances (fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
-        SELECT fecha, eess, turno, brigada, integrantes, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip
+        INSERT INTO avances (fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        SELECT fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip
         FROM avances_seq ORDER BY id ASC;
     ''')
     c.execute("DROP TABLE avances_seq;")
@@ -254,7 +299,7 @@ opcion = st.sidebar.radio("Ir a:", [
 # ==========================================
 if opcion == "📝 Registrar Avance Diario":
     st.header("📝 Registro de Avances Diario de Vacunación Canina")
-    st.caption("Completa el formulario para ingresar la producción de las brigadas de campo.")
+    st.caption("Completa el formulario seleccionando al Integrante 1 e Integrante 2 de la brigada.")
 
     with st.form("form_registro", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -266,39 +311,36 @@ if opcion == "📝 Registrar Avance Diario":
         with col2:
             brigada_input = st.selectbox("Brigada", LISTA_BRIGADAS)
             responsable_input = st.text_input("Responsable de Brigada", value="MARINA")
-            zona_input = st.selectbox("Zona / Lugar de Intervención (ZONAS.CSV)", LISTA_ZONAS)
+            zona_input = st.selectbox("Zona / Lugar (ZONAS.CSV)", LISTA_ZONAS)
 
         with col3:
             dosis_input = st.number_input("Dosis Aplicadas (Canes)", min_value=0, step=1, value=50)
             
-            # SELECCIÓN MÚLTIPLE DE HASTA 2 INTEGRANTES
-            integrantes_sel = st.multiselect(
-                "Integrantes (PERSONAL.CSV - Máx 2)", 
-                options=LISTA_PERSONAL,
-                default=LISTA_PERSONAL[:2] if len(LISTA_PERSONAL) >= 2 else LISTA_PERSONAL,
-                max_selections=2,
-                help="Selecciona hasta 2 integrantes leídos desde PERSONAL.CSV"
-            )
+            # SELECCIÓN DESGLOSADA EN DOS INTEGRANTES
+            integ1_sel = st.selectbox("Integrante 1 (Obligatorio)", options=["-- Seleccionar --"] + LISTA_PERSONAL, index=1 if len(LISTA_PERSONAL)>0 else 0)
+            integ2_sel = st.selectbox("Integrante 2 (Opcional)", options=["-- Ninguno --"] + LISTA_PERSONAL, index=2 if len(LISTA_PERSONAL)>1 else 0)
+            
             observaciones_input = st.text_area("Observaciones", value="")
 
         btn_guardar = st.form_submit_button("💾 Guardar Registro de Avance", type="primary", use_container_width=True)
 
         if btn_guardar:
-            if not integrantes_sel:
-                st.error("⚠️ Debes seleccionar al menos un integrante de la lista.")
+            if integ1_sel == "-- Seleccionar --":
+                st.error("⚠️ Debes seleccionar al menos el Integrante 1.")
             else:
-                integrantes_str = ", ".join(integrantes_sel)
+                p1 = integ1_sel
+                p2 = integ2_sel if integ2_sel != "-- Ninguno --" else ""
                 guardar_avance_db(
                     fecha_input, eess_input, turno_input, brigada_input, 
-                    integrantes_str, responsable_input, zona_input, 
+                    p1, p2, responsable_input, zona_input, 
                     dosis_input, observaciones_input, st.session_state["username"]
                 )
-                st.success(f"✅ Registro guardado con éxito. Integrantes: {integrantes_str}")
+                st.success(f"✅ Registro guardado con éxito. Integrantes: {p1} / {p2 if p2 else 'Solo'}")
                 st.rerun()
 
     st.markdown("---")
     st.subheader("📋 Gestión y Edición de Registros Guardados")
-    st.caption("Los listados desplegables se alimentan directamente de tus archivos maestros reales (ZONAS.CSV, PERSONAL.CSV, etc.).")
+    st.caption("Puedes editar directamente Integrante 1 e Integrante 2 desde las columnas desglosadas.")
     
     df_all = cargar_datos()
     if not df_all.empty:
@@ -310,17 +352,17 @@ if opcion == "📝 Registrar Avance Diario":
 
             columnas_ordenadas = [
                 "id", "fecha", "eess", "turno", "brigada", 
-                "responsable", "zona", "dosis", "integrantes", 
+                "responsable", "zona", "dosis", "integrante_1", "integrante_2",
                 "observaciones", "usuario_registro", "fecha_hora_modificacion", "equipo_ip"
             ]
             cols_presentes = [c for c in columnas_ordenadas if c in df_mostrar.columns]
             df_mostrar = df_mostrar[cols_presentes]
 
-            # OPCIONES REALES BASADAS EN CSV Y DATOS EXISTENTES
             opts_eess = sorted(list(set(LISTA_EESS + df_mostrar['eess'].dropna().astype(str).tolist())))
             opts_turno = sorted(list(set(LISTA_TURNOS + df_mostrar['turno'].dropna().astype(str).tolist())))
             opts_brigada = sorted(list(set(LISTA_BRIGADAS + df_mostrar['brigada'].dropna().astype(str).tolist())))
             opts_zona = sorted(list(set(LISTA_ZONAS + df_mostrar['zona'].dropna().astype(str).tolist())))
+            opts_personal = sorted(list(set([""] + LISTA_PERSONAL + df_mostrar['integrante_1'].dropna().astype(str).tolist() + df_mostrar['integrante_2'].dropna().astype(str).tolist())))
 
             df_edited = st.data_editor(
                 df_mostrar,
@@ -332,7 +374,8 @@ if opcion == "📝 Registrar Avance Diario":
                     "brigada": st.column_config.SelectboxColumn("Brigada", options=opts_brigada, required=True),
                     "zona": st.column_config.SelectboxColumn("Zona (ZONAS.CSV)", options=opts_zona, required=True),
                     "dosis": st.column_config.NumberColumn("Dosis", min_value=0, step=1, required=True),
-                    "integrantes": st.column_config.TextColumn("Integrantes (PERSONAL.CSV)", required=True),
+                    "integrante_1": st.column_config.SelectboxColumn("Integrante 1", options=opts_personal, required=True),
+                    "integrante_2": st.column_config.SelectboxColumn("Integrante 2", options=opts_personal, required=False),
                     "observaciones": st.column_config.TextColumn("Observaciones")
                 },
                 disabled=["usuario_registro", "fecha_hora_modificacion", "equipo_ip"],
@@ -347,8 +390,8 @@ if opcion == "📝 Registrar Avance Diario":
                     for _, row in df_edited.iterrows():
                         actualizar_registro_db(
                             row['id'], row['fecha'], row['eess'], row['turno'], 
-                            row['brigada'], str(row['integrantes']), row['responsable'], 
-                            row['zona'], int(row['dosis']), str(row['observaciones'])
+                            row['brigada'], str(row['integrante_1']), str(row['integrante_2']) if pd.notna(row['integrante_2']) else "", 
+                            row['responsable'], row['zona'], int(row['dosis']), str(row['observaciones'])
                         )
                     st.success("✅ Registros actualizados correctamente.")
                     st.rerun()
@@ -416,7 +459,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
     st.markdown("---")
 
-    # SECCIÓN VACUNÓMETRO Y VELOCÍMETRO
     c_vac1, c_vac2 = st.columns([1, 2])
     with c_vac1:
         st.markdown("### 💉 Vacunómetro de Avance")
@@ -446,11 +488,9 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
     st.markdown("---")
 
-    # GRÁFICOS ANALÍTICOS (POR DÍA Y POR PERSONA CON DIVISIÓN ENTRE INTEGRANTES DE BRIGADA)
     if not df_f.empty:
         g1, g2 = st.columns(2)
 
-        # 1. GRÁFICO POR DÍA (FECHA)
         with g1:
             st.markdown("### 📅 Avance Diario de Vacunación")
             df_diario = df_f.groupby('fecha')['dosis'].sum().reset_index()
@@ -469,69 +509,157 @@ elif opcion == "📊 Dashboard y Vacunómetro":
             fig_diario.update_traces(textposition='outside')
             st.plotly_chart(fig_diario, use_container_width=True)
 
-        # 2. GRÁFICO POR PERSONA (PRODUCCIÓN DIVIDIDA ENTRE INTEGRANTES DE BRIGADA)
         with g2:
             st.markdown("### 👤 Producción Individual por Persona")
-            st.caption("💡 Si la brigada es de 2 personas, las dosis del registro se dividen por igual (50% a cada integrante).")
+            st.caption("💡 Las dosis registradas se dividen equitativamente entre Integrante 1 e Integrante 2.")
 
             registros_personas = []
             for _, row in df_f.iterrows():
-                integrantes_lista = [i.strip() for i in str(row['integrantes']).split(',') if i.strip()]
-                cant_integrantes = len(integrantes_lista)
+                p1 = str(row.get('integrante_1', '')).strip()
+                p2 = str(row.get('integrante_2', '')).strip()
                 
-                if cant_integrantes > 0:
-                    dosis_por_persona = float(row['dosis']) / cant_integrantes
-                    for p in integrantes_lista:
-                        registros_personas.append({'persona': p, 'dosis_individual': dosis_por_persona})
-                else:
-                    registros_personas.append({'persona': 'No especificado', 'dosis_individual': float(row['dosis'])})
+                # Manejar compatibilidad si existía columna 'integrantes'
+                if not p1 and 'integrantes' in row and pd.notna(row['integrantes']):
+                    partes = [x.strip() for x in str(row['integrantes']).split(',') if x.strip()]
+                    p1 = partes[0] if len(partes) > 0 else ""
+                    p2 = partes[1] if len(partes) > 1 else ""
 
-            df_personas = pd.DataFrame(registros_personas)
-            df_personas_agg = df_personas.groupby('persona')['dosis_individual'].sum().reset_index()
-            df_personas_agg['dosis_individual'] = df_personas_agg['dosis_individual'].round(1)
-            df_personas_agg = df_personas_agg.sort_values('dosis_individual', ascending=True)
+                integrantes_activos = [p for p in [p1, p2] if p and p.lower() not in ['none', 'nan', 'null', '']]
+                cant = len(integrantes_activos)
+                
+                if cant > 0:
+                    dosis_persona = float(row['dosis']) / cant
+                    for p in integrantes_activos:
+                        registros_personas.append({'persona': p, 'dosis_individual': dosis_persona})
 
-            fig_personas = px.bar(
-                df_personas_agg, 
-                y='persona', 
-                x='dosis_individual', 
-                orientation='h',
-                text='dosis_individual',
-                labels={'persona': 'Integrante de Brigada', 'dosis_individual': 'Producción (Dosis)'},
-                title="Producción Equitativa por Integrante",
-                color_discrete_sequence=['#2E8B57']
-            )
-            fig_personas.update_traces(textposition='outside')
-            st.plotly_chart(fig_personas, use_container_width=True)
+            if registros_personas:
+                df_personas = pd.DataFrame(registros_personas)
+                df_personas_agg = df_personas.groupby('persona')['dosis_individual'].sum().reset_index()
+                df_personas_agg['dosis_individual'] = df_personas_agg['dosis_individual'].round(1)
+                df_personas_agg = df_personas_agg.sort_values('dosis_individual', ascending=True)
+
+                fig_personas = px.bar(
+                    df_personas_agg, 
+                    y='persona', 
+                    x='dosis_individual', 
+                    orientation='h',
+                    text='dosis_individual',
+                    labels={'persona': 'Integrante de Brigada', 'dosis_individual': 'Producción (Dosis)'},
+                    title="Producción Equitativa por Integrante",
+                    color_discrete_sequence=['#2E8B57']
+                )
+                fig_personas.update_traces(textposition='outside')
+                st.plotly_chart(fig_personas, use_container_width=True)
+            else:
+                st.info("No hay datos de integrantes para el gráfico.")
     else:
         st.info("No hay datos para mostrar los gráficos analíticos con los filtros seleccionados.")
 
 # ==========================================
-# MÓDULO 3: CONFIGURACIÓN Y METAS
+# MÓDULO 3: CONFIGURACIÓN, METAS Y PERSONAL
 # ==========================================
 elif opcion == "⚙️ Configuración / Metas":
-    st.header("⚙️ Configuración del Sistema y Metas")
-    st.caption("Gestiona las metas de vacunación por establecimiento de salud.")
+    st.header("⚙️ Configuración del Sistema")
+    st.caption("Administra las Metas por Establecimiento y el Padrón de Personal.")
 
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
+    tab_metas, tab_personal = st.tabs(["🎯 Gestor de Metas", "👥 Gestor de Personal"])
 
-    with st.form("form_metas"):
-        eess_meta = st.selectbox("Selecciona Establecimiento", LISTA_EESS)
-        meta_val = st.number_input("Meta de Canes", min_value=1, value=1400, step=50)
-        btn_meta = st.form_submit_button("Guardar Meta")
+    # 1. TAB METAS
+    with tab_metas:
+        st.subheader("➕ Agregar / Actualizar Meta")
+        conn = sqlite3.connect('vancan_data.db')
+        c = conn.cursor()
 
-        if btn_meta:
-            c.execute("DELETE FROM metas WHERE eess=?", (eess_meta,))
-            c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_meta, meta_val))
-            conn.commit()
-            st.success(f"Meta actualizada para {eess_meta}: {meta_val:,} canes")
-            st.rerun()
+        with st.form("form_metas"):
+            c1, c2 = st.columns(2)
+            eess_meta = c1.selectbox("Establecimiento de Salud", LISTA_EESS)
+            meta_val = c2.number_input("Meta de Canes", min_value=1, value=1400, step=50)
+            btn_meta = st.form_submit_button("Guardar Meta", type="primary")
 
-    st.subheader("📋 Metas Actualmente Registradas")
-    df_m = cargar_metas()
-    if not df_m.empty:
-        st.dataframe(df_m, use_container_width=True)
-    else:
-        st.info("Usando metas automáticas desde archivos CSV.")
-    conn.close()
+            if btn_meta:
+                c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_meta, meta_val))
+                conn.commit()
+                st.success(f"Meta guardada correctamente para {eess_meta}: {meta_val:,} canes")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("📋 Metas Registradas (Editable)")
+        st.caption("Puedes editar o eliminar registros directamente en la tabla.")
+        
+        df_m = cargar_metas()
+        if not df_m.empty:
+            df_m_edited = st.data_editor(
+                df_m,
+                column_config={
+                    "id": st.column_config.NumberColumn("ID", disabled=True),
+                    "eess": st.column_config.SelectboxColumn("Establecimiento", options=LISTA_EESS, required=True),
+                    "meta_canes": st.column_config.NumberColumn("Meta Canes", min_value=1, step=10, required=True)
+                },
+                use_container_width=True,
+                num_rows="dynamic",
+                key="editor_metas"
+            )
+
+            if st.button("💾 Guardar Cambios en Metas", type="primary"):
+                c.execute("DELETE FROM metas")
+                for _, r in df_m_edited.iterrows():
+                    c.execute("INSERT INTO metas (id, eess, meta_canes) VALUES (?, ?, ?)", (r['id'], r['eess'], int(r['meta_canes'])))
+                conn.commit()
+                st.success("✅ Metas actualizadas correctamente.")
+                st.rerun()
+        else:
+            st.info("No hay metas manuales registradas aún en la base de datos.")
+        conn.close()
+
+    # 2. TAB PERSONAL
+    with tab_personal:
+        st.subheader("➕ Agregar Nuevo Personal al Padrón")
+        conn = sqlite3.connect('vancan_data.db')
+        c = conn.cursor()
+
+        with st.form("form_personal"):
+            col_p1, col_p2 = st.columns(2)
+            nom_pers = col_p1.text_input("Nombre y Cargo (Ej: Tec. Maria Perez)", value="")
+            dni_pers = col_p2.text_input("DNI (Opcional)", value="")
+            btn_pers = st.form_submit_button("Guardar Personal", type="primary")
+
+            if btn_pers:
+                if nom_pers.strip():
+                    try:
+                        c.execute("INSERT INTO personal_db (nombre, dni) VALUES (?, ?)", (nom_pers.strip(), dni_pers.strip()))
+                        conn.commit()
+                        st.success(f"✅ {nom_pers.strip()} agregado exitosamente al padrón.")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("⚠️ Este nombre ya existe en el padrón registrado.")
+                else:
+                    st.error("⚠️ Ingrese un nombre válido.")
+
+        st.markdown("---")
+        st.subheader("📋 Padrón de Personal Registrado en DB (Editable)")
+        st.caption("Los cambios guardados aquí se reflejarán de inmediato en los desplegables de registro diario.")
+
+        df_p = cargar_personal_db()
+        if not df_p.empty:
+            df_p_edited = st.data_editor(
+                df_p,
+                column_config={
+                    "id": st.column_config.NumberColumn("ID", disabled=True),
+                    "nombre": st.column_config.TextColumn("Nombre y Cargo", required=True),
+                    "dni": st.column_config.TextColumn("DNI")
+                },
+                use_container_width=True,
+                num_rows="dynamic",
+                key="editor_personal"
+            )
+
+            if st.button("💾 Guardar Cambios en Personal", type="primary"):
+                c.execute("DELETE FROM personal_db")
+                for _, r in df_p_edited.iterrows():
+                    c.execute("INSERT INTO personal_db (id, nombre, dni) VALUES (?, ?, ?)", (r['id'], str(r['nombre']).strip(), str(r['dni']).strip()))
+                conn.commit()
+                st.success("✅ Padrón de personal actualizado correctamente.")
+                st.rerun()
+        else:
+            st.info("Aún no has agregado personal manual a la DB. (Se están leyendo los del CSV).")
+        conn.close()
