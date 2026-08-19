@@ -29,17 +29,19 @@ def normalizar_texto(texto):
     return re.sub(r'\s+', ' ', texto)
 
 # ==========================================
-# INICIALIZACIÓN DE DB CON MIGRACIÓN AUTOMÁTICA
+# AUTORREPARACIÓN Y MIGRACIÓN DE ESTRUCTURA DB
 # ==========================================
-def init_db():
+def reparar_y_migrar_db():
+    """Garantiza que la base de datos tenga las columnas 'id' en todas las tablas."""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     
-    # 1. Migración y creación de Tabla 'metas'
+    # 1. Reparar Tabla 'metas'
+    c.execute("CREATE TABLE IF NOT EXISTS metas (eess TEXT UNIQUE, meta_canes INTEGER)")
     c.execute("PRAGMA table_info(metas)")
     cols_metas = [col[1] for col in c.fetchall()]
     
-    if cols_metas and 'id' not in cols_metas:
+    if 'id' not in cols_metas:
         c.execute("ALTER TABLE metas RENAME TO metas_old")
         c.execute('''
             CREATE TABLE metas (
@@ -48,27 +50,20 @@ def init_db():
                 meta_canes INTEGER
             )
         ''')
-        c.execute("INSERT INTO metas (eess, meta_canes) SELECT eess, meta_canes FROM metas_old")
+        c.execute("INSERT OR IGNORE INTO metas (eess, meta_canes) SELECT eess, meta_canes FROM metas_old")
         c.execute("DROP TABLE metas_old")
-    else:
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS metas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                eess TEXT UNIQUE,
-                meta_canes INTEGER
-            )
-        ''')
 
-    # Precarga inicial si la tabla metas está vacía
+    # Precarga inicial en metas si está vacía
     c.execute("SELECT COUNT(*) FROM metas")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", ("C.S. CESAR LOPEZ SILVA", 1400))
 
-    # 2. Migración y creación de Tabla 'personal_db'
+    # 2. Reparar Tabla 'personal_db'
+    c.execute("CREATE TABLE IF NOT EXISTS personal_db (nombre TEXT UNIQUE, cargo TEXT, dni TEXT)")
     c.execute("PRAGMA table_info(personal_db)")
     cols_personal = [col[1] for col in c.fetchall()]
     
-    if cols_personal and 'id' not in cols_personal:
+    if 'id' not in cols_personal:
         c.execute("ALTER TABLE personal_db RENAME TO personal_old")
         c.execute('''
             CREATE TABLE personal_db (
@@ -78,19 +73,10 @@ def init_db():
                 dni TEXT
             )
         ''')
-        c.execute("INSERT INTO personal_db (nombre, cargo, dni) SELECT nombre, cargo, dni FROM personal_old")
+        c.execute("INSERT OR IGNORE INTO personal_db (nombre, cargo, dni) SELECT nombre, cargo, dni FROM personal_old")
         c.execute("DROP TABLE personal_old")
-    else:
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS personal_db (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT UNIQUE,
-                cargo TEXT,
-                dni TEXT
-            )
-        ''')
 
-    # Precarga inicial si la tabla personal_db está vacía
+    # Precarga inicial en personal si está vacía
     c.execute("SELECT COUNT(*) FROM personal_db")
     if c.fetchone()[0] == 0:
         personal_inicial = [
@@ -100,7 +86,7 @@ def init_db():
         ]
         c.executemany("INSERT INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", personal_inicial)
 
-    # 3. Tabla 'avances'
+    # 3. Tabla de Avances
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,7 +111,6 @@ def init_db():
 def reindexar_tabla(nombre_tabla):
     """
     Reorganiza los IDs de una tabla desde el 1 consecutivamente (1, 2, 3...)
-    de forma segura descartando conflictos con sqlite_sequence.
     """
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
@@ -155,10 +140,11 @@ def reindexar_tabla(nombre_tabla):
     conn.commit()
     conn.close()
 
-init_db()
+# Ejecutamos la migración previa
+reparar_y_migrar_db()
 
 # ==========================================
-# FUNCIONES DE CONSULTA
+# FUNCIONES DE CONSULTA SEGURA
 # ==========================================
 def cargar_avances():
     conn = sqlite3.connect('vancan_data.db')
@@ -168,13 +154,25 @@ def cargar_avances():
 
 def cargar_metas():
     conn = sqlite3.connect('vancan_data.db')
-    df = pd.read_sql_query("SELECT id, eess, meta_canes FROM metas ORDER BY id ASC", conn)
+    try:
+        df = pd.read_sql_query("SELECT id, eess, meta_canes FROM metas ORDER BY id ASC", conn)
+    except Exception:
+        conn.close()
+        reparar_y_migrar_db()
+        conn = sqlite3.connect('vancan_data.db')
+        df = pd.read_sql_query("SELECT id, eess, meta_canes FROM metas ORDER BY id ASC", conn)
     conn.close()
     return df
 
 def cargar_personal():
     conn = sqlite3.connect('vancan_data.db')
-    df = pd.read_sql_query("SELECT id, nombre, cargo, dni FROM personal_db ORDER BY id ASC", conn)
+    try:
+        df = pd.read_sql_query("SELECT id, nombre, cargo, dni FROM personal_db ORDER BY id ASC", conn)
+    except Exception:
+        conn.close()
+        reparar_y_migrar_db()
+        conn = sqlite3.connect('vancan_data.db')
+        df = pd.read_sql_query("SELECT id, nombre, cargo, dni FROM personal_db ORDER BY id ASC", conn)
     conn.close()
     return df
 
