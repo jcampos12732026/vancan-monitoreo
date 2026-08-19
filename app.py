@@ -29,13 +29,78 @@ def normalizar_texto(texto):
     return re.sub(r'\s+', ' ', texto)
 
 # ==========================================
-# BASE DE DATOS SQLITE Y REINDEXACIÓN DE IDs
+# INICIALIZACIÓN DE DB CON MIGRACIÓN AUTOMÁTICA
 # ==========================================
 def init_db():
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     
-    # Tabla de Avances Diarios
+    # 1. Migración y creación de Tabla 'metas'
+    c.execute("PRAGMA table_info(metas)")
+    cols_metas = [col[1] for col in c.fetchall()]
+    
+    if cols_metas and 'id' not in cols_metas:
+        c.execute("ALTER TABLE metas RENAME TO metas_old")
+        c.execute('''
+            CREATE TABLE metas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                eess TEXT UNIQUE,
+                meta_canes INTEGER
+            )
+        ''')
+        c.execute("INSERT INTO metas (eess, meta_canes) SELECT eess, meta_canes FROM metas_old")
+        c.execute("DROP TABLE metas_old")
+    else:
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS metas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                eess TEXT UNIQUE,
+                meta_canes INTEGER
+            )
+        ''')
+
+    # Precarga inicial si la tabla metas está vacía
+    c.execute("SELECT COUNT(*) FROM metas")
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", ("C.S. CESAR LOPEZ SILVA", 1400))
+
+    # 2. Migración y creación de Tabla 'personal_db'
+    c.execute("PRAGMA table_info(personal_db)")
+    cols_personal = [col[1] for col in c.fetchall()]
+    
+    if cols_personal and 'id' not in cols_personal:
+        c.execute("ALTER TABLE personal_db RENAME TO personal_old")
+        c.execute('''
+            CREATE TABLE personal_db (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT UNIQUE,
+                cargo TEXT,
+                dni TEXT
+            )
+        ''')
+        c.execute("INSERT INTO personal_db (nombre, cargo, dni) SELECT nombre, cargo, dni FROM personal_old")
+        c.execute("DROP TABLE personal_old")
+    else:
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS personal_db (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT UNIQUE,
+                cargo TEXT,
+                dni TEXT
+            )
+        ''')
+
+    # Precarga inicial si la tabla personal_db está vacía
+    c.execute("SELECT COUNT(*) FROM personal_db")
+    if c.fetchone()[0] == 0:
+        personal_inicial = [
+            ("TEC. JORGE CAMPOS", "TÉCNICO", ""),
+            ("LIC. ETHEL ROSALES", "ENFERMERA", ""),
+            ("TEC. MARINA GALAN", "TÉCNICO", "")
+        ]
+        c.executemany("INSERT INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", personal_inicial)
+
+    # 3. Tabla 'avances'
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,46 +118,6 @@ def init_db():
             fecha_hora_modificacion TEXT
         )
     ''')
-    
-    # Tabla de Establecimientos y Metas
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS metas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            eess TEXT UNIQUE,
-            meta_canes INTEGER
-        )
-    ''')
-
-    # Precarga de referencia inicial si la tabla está vacía
-    c.execute("SELECT COUNT(*) FROM metas")
-    if c.fetchone()[0] == 0:
-        metas_iniciales = [
-            ("C.S. CESAR LOPEZ SILVA", 1400),
-            ("C.S. MOYOPAMPA", 1200),
-            ("C.S. CHACLACAYO", 1500)
-        ]
-        c.executemany("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", metas_iniciales)
-
-    # Tabla de Personal
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS personal_db (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT UNIQUE,
-            cargo TEXT,
-            dni TEXT
-        )
-    ''')
-    
-    # Precarga de referencia inicial de personal si la tabla está vacía
-    c.execute("SELECT COUNT(*) FROM personal_db")
-    if c.fetchone()[0] == 0:
-        personal_inicial = [
-            ("TEC. JORGE CAMPOS", "TÉCNICO", ""),
-            ("LIC. ETHEL ROSALES", "ENFERMERA", ""),
-            ("TEC. MARINA GALAN", "TÉCNICO", ""),
-            ("LIC. SARA VILLANUEVA", "ENFERMERA", "")
-        ]
-        c.executemany("INSERT INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", personal_inicial)
 
     conn.commit()
     conn.close()
@@ -100,7 +125,7 @@ def init_db():
 def reindexar_tabla(nombre_tabla):
     """
     Reorganiza los IDs de una tabla desde el 1 consecutivamente (1, 2, 3...)
-    después de realizar eliminaciones o actualizaciones masivas.
+    de forma segura descartando conflictos con sqlite_sequence.
     """
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
@@ -109,7 +134,10 @@ def reindexar_tabla(nombre_tabla):
         c.execute("SELECT eess, meta_canes FROM metas ORDER BY id ASC")
         registros = c.fetchall()
         c.execute("DELETE FROM metas")
-        c.execute("DELETE FROM sqlite_sequence WHERE name='metas'")
+        try:
+            c.execute("DELETE FROM sqlite_sequence WHERE name='metas'")
+        except sqlite3.OperationalError:
+            pass
         for item in registros:
             c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", item)
             
@@ -117,7 +145,10 @@ def reindexar_tabla(nombre_tabla):
         c.execute("SELECT nombre, cargo, dni FROM personal_db ORDER BY id ASC")
         registros = c.fetchall()
         c.execute("DELETE FROM personal_db")
-        c.execute("DELETE FROM sqlite_sequence WHERE name='personal_db'")
+        try:
+            c.execute("DELETE FROM sqlite_sequence WHERE name='personal_db'")
+        except sqlite3.OperationalError:
+            pass
         for item in registros:
             c.execute("INSERT INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", item)
             
@@ -359,9 +390,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                         conn.commit()
                         conn.close()
                         
-                        # Reindexar IDs desde 1
                         reindexar_tabla("metas")
-                        
                         st.success(f"Establecimiento {eess_borrar} eliminado y los IDs fueron reindexados.")
                         st.rerun()
         else:
@@ -446,9 +475,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                         conn.commit()
                         conn.close()
                         
-                        # Reindexar IDs desde 1
                         reindexar_tabla("personal_db")
-                        
                         st.success(f"Trabajador {pers_borrar} eliminado y los IDs fueron reindexados.")
                         st.rerun()
         else:
