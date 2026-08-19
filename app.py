@@ -32,13 +32,14 @@ def normalizar_texto(texto):
     return texto
 
 # ==========================================
-# BASE DE DATOS SQLITE (INICIALIZACIÓN)
+# BASE DE DATOS SQLITE (INICIALIZACIÓN TOTAL)
 # ==========================================
 def init_db():
+    """Inicializa todas las tablas de la base de datos para evitar errores de consulta"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     
-    # Tabla de Avances con Integrante 1 e Integrante 2
+    # 1. Tabla de Avances
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +59,7 @@ def init_db():
         )
     ''')
     
-    # Migración suave si existe la columna antigua 'integrantes'
+    # Migración por si existe la columna antigua 'integrantes'
     c.execute("PRAGMA table_info(avances)")
     cols = [col[1] for col in c.fetchall()]
     if 'integrantes' in cols and 'integrante_1' not in cols:
@@ -66,7 +67,7 @@ def init_db():
         c.execute("ALTER TABLE avances ADD COLUMN integrante_2 TEXT")
         c.execute("UPDATE avances SET integrante_1 = integrantes")
     
-    # Tabla de Metas
+    # 2. Tabla de Metas
     c.execute('''
         CREATE TABLE IF NOT EXISTS metas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,7 +76,7 @@ def init_db():
         )
     ''')
     
-    # Tabla de Personal Maestro
+    # 3. Tabla de Personal
     c.execute('''
         CREATE TABLE IF NOT EXISTS personal_db (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,23 +88,118 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Se ejecuta al arrancar el script siempre
 init_db()
 
 # ==========================================
-# CARGA Y GESTIÓN DE PERSONAL (CSV + DB)
+# FUNCIONES SQLITE BLINDADAS
+# ==========================================
+def cargar_datos():
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    try:
+        df = pd.read_sql_query("SELECT * FROM avances ORDER BY id ASC", conn)
+    except Exception:
+        df = pd.DataFrame()
+    finally:
+        conn.close()
+    return df
+
+def cargar_metas():
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    try:
+        df = pd.read_sql_query("SELECT * FROM metas ORDER BY id ASC", conn)
+    except Exception:
+        df = pd.DataFrame(columns=['id', 'eess', 'meta_canes'])
+    finally:
+        conn.close()
+    return df
+
+def cargar_personal_db():
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    try:
+        df = pd.read_sql_query("SELECT * FROM personal_db ORDER BY id ASC", conn)
+    except Exception:
+        df = pd.DataFrame(columns=['id', 'nombre', 'dni'])
+    finally:
+        conn.close()
+    return df
+
+def guardar_avance_db(fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro):
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ip_simulada = "10.14.14.2, 10.16"
+    c.execute('''
+        INSERT INTO avances (fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (str(fecha), eess, turno, brigada, integrante_1, integrante_2, responsable, zona, int(dosis), observaciones, usuario_registro, fecha_mod, ip_simulada))
+    conn.commit()
+    conn.close()
+
+def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones):
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''
+        UPDATE avances 
+        SET fecha=?, eess=?, turno=?, brigada=?, integrante_1=?, integrante_2=?, responsable=?, zona=?, dosis=?, observaciones=?, fecha_hora_modificacion=?
+        WHERE id=?
+    ''', (str(fecha), eess, turno, brigada, integrante_1, integrante_2, responsable, zona, int(dosis), observaciones, fecha_mod, id_reg))
+    conn.commit()
+    conn.close()
+
+def reordenar_ids_db():
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute("CREATE TABLE avances_seq AS SELECT * FROM avances ORDER BY id ASC;")
+    c.execute("DELETE FROM avances;")
+    c.execute("DELETE FROM sqlite_sequence WHERE name='avances';")
+    c.execute('''
+        INSERT INTO avances (fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
+        SELECT fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip
+        FROM avances_seq ORDER BY id ASC;
+    ''')
+    c.execute("DROP TABLE avances_seq;")
+    conn.commit()
+    conn.close()
+
+def eliminar_registro_db(id_reg):
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM avances WHERE id=?", (id_reg,))
+    conn.commit()
+    conn.close()
+    reordenar_ids_db()
+
+def vaciar_base_datos_db():
+    init_db()
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM avances")
+    c.execute("DELETE FROM sqlite_sequence WHERE name='avances'")
+    conn.commit()
+    conn.close()
+
+# ==========================================
+# CARGA DE DATOS COMPLEMENTARIOS (CSV + DB)
 # ==========================================
 def cargar_personal_completo():
     """Combina datos de PERSONAL.csv con los registrados en la DB"""
     personal_set = set()
     
     # 1. Desde la base de datos
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    c.execute("SELECT nombre FROM personal_db ORDER BY nombre ASC")
-    for row in c.fetchall():
-        if row[0]:
-            personal_set.add(str(row[0]).strip())
-    conn.close()
+    df_p = cargar_personal_db()
+    if not df_p.empty and 'nombre' in df_p.columns:
+        for n in df_p['nombre'].dropna().astype(str).tolist():
+            if n.strip():
+                personal_set.add(n.strip())
 
     # 2. Desde el archivo CSV
     archivos = ['PERSONAL.csv', 'personal.csv', 'Personal.csv', 'PERSONAL.CSV']
@@ -129,7 +225,7 @@ def cargar_personal_completo():
     return resultado if resultado else ["Tec. Jorge Campos", "Lic. Jorge Vasquez", "Tec. Marina Galan"]
 
 def cargar_zonas_csv():
-    """Lee ZONAS.csv trayendo las +80 zonas dinámicamente"""
+    """Lee ZONAS.csv trayendo las zonas dinámicamente"""
     archivos = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv', 'ZONAS.CSV']
     for archivo in archivos:
         if os.path.exists(archivo):
@@ -160,82 +256,6 @@ LISTA_ZONAS = cargar_zonas_csv()
 LISTA_EESS = ["C.S. CESAR LOEPZ SILVA", "C.S. NAÑA", "C.S. MORON", "C.S. CHOSICA"]
 LISTA_TURNOS = ["Mañana", "Tarde"]
 LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 21)]
-
-# ==========================================
-# FUNCIONES SQLITE PARA REGISTROS Y METAS
-# ==========================================
-def cargar_datos():
-    conn = sqlite3.connect('vancan_data.db')
-    df = pd.read_sql_query("SELECT * FROM avances ORDER BY id ASC", conn)
-    conn.close()
-    return df
-
-def cargar_metas():
-    conn = sqlite3.connect('vancan_data.db')
-    df = pd.read_sql_query("SELECT * FROM metas ORDER BY id ASC", conn)
-    conn.close()
-    return df
-
-def cargar_personal_db():
-    conn = sqlite3.connect('vancan_data.db')
-    df = pd.read_sql_query("SELECT * FROM personal_db ORDER BY id ASC", conn)
-    conn.close()
-    return df
-
-def guardar_avance_db(fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro):
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ip_simulada = "10.14.14.2, 10.16"
-    c.execute('''
-        INSERT INTO avances (fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (str(fecha), eess, turno, brigada, integrante_1, integrante_2, responsable, zona, int(dosis), observaciones, usuario_registro, fecha_mod, ip_simulada))
-    conn.commit()
-    conn.close()
-
-def actualizar_registro_db(id_reg, fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones):
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    fecha_mod = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''
-        UPDATE avances 
-        SET fecha=?, eess=?, turno=?, brigada=?, integrante_1=?, integrante_2=?, responsable=?, zona=?, dosis=?, observaciones=?, fecha_hora_modificacion=?
-        WHERE id=?
-    ''', (str(fecha), eess, turno, brigada, integrante_1, integrante_2, responsable, zona, int(dosis), observaciones, fecha_mod, id_reg))
-    conn.commit()
-    conn.close()
-
-def reordenar_ids_db():
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    c.execute("CREATE TABLE avances_seq AS SELECT * FROM avances ORDER BY id ASC;")
-    c.execute("DELETE FROM avances;")
-    c.execute("DELETE FROM sqlite_sequence WHERE name='avances';")
-    c.execute('''
-        INSERT INTO avances (fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip)
-        SELECT fecha, eess, turno, brigada, integrante_1, integrante_2, responsable, zona, dosis, observaciones, usuario_registro, fecha_hora_modificacion, equipo_ip
-        FROM avances_seq ORDER BY id ASC;
-    ''')
-    c.execute("DROP TABLE avances_seq;")
-    conn.commit()
-    conn.close()
-
-def eliminar_registro_db(id_reg):
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM avances WHERE id=?", (id_reg,))
-    conn.commit()
-    conn.close()
-    reordenar_ids_db()
-
-def vaciar_base_datos_db():
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM avances")
-    c.execute("DELETE FROM sqlite_sequence WHERE name='avances'")
-    conn.commit()
-    conn.close()
 
 def obtener_metas_csv():
     metas_dict = {
@@ -278,7 +298,7 @@ def obtener_meta_establecimiento(eess_nombre, mapa_metas):
     return 1000
 
 # ==========================================
-# CONTROL DE SESIÓN Y NAVEGACIÓN
+# NAVEGACIÓN Y MENÚ LATERAL
 # ==========================================
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = True
@@ -316,7 +336,6 @@ if opcion == "📝 Registrar Avance Diario":
         with col3:
             dosis_input = st.number_input("Dosis Aplicadas (Canes)", min_value=0, step=1, value=50)
             
-            # SELECCIÓN DESGLOSADA EN DOS INTEGRANTES
             integ1_sel = st.selectbox("Integrante 1 (Obligatorio)", options=["-- Seleccionar --"] + LISTA_PERSONAL, index=1 if len(LISTA_PERSONAL)>0 else 0)
             integ2_sel = st.selectbox("Integrante 2 (Opcional)", options=["-- Ninguno --"] + LISTA_PERSONAL, index=2 if len(LISTA_PERSONAL)>1 else 0)
             
@@ -416,7 +435,7 @@ if opcion == "📝 Registrar Avance Diario":
         st.info("No hay registros guardados en la base de datos.")
 
 # ==========================================
-# MÓDULO 2: DASHBOARD, VACUNÓMETRO Y GRÁFICOS
+# MÓDULO 2: DASHBOARD Y VACUNÓMETRO
 # ==========================================
 elif opcion == "📊 Dashboard y Vacunómetro":
     col_head_dash, col_btn_ref = st.columns([4, 1])
@@ -518,7 +537,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
                 p1 = str(row.get('integrante_1', '')).strip()
                 p2 = str(row.get('integrante_2', '')).strip()
                 
-                # Manejar compatibilidad si existía columna 'integrantes'
                 if not p1 and 'integrantes' in row and pd.notna(row['integrantes']):
                     partes = [x.strip() for x in str(row['integrantes']).split(',') if x.strip()]
                     p1 = partes[0] if len(partes) > 0 else ""
@@ -567,9 +585,7 @@ elif opcion == "⚙️ Configuración / Metas":
     # 1. TAB METAS
     with tab_metas:
         st.subheader("➕ Agregar / Actualizar Meta")
-        conn = sqlite3.connect('vancan_data.db')
-        c = conn.cursor()
-
+        
         with st.form("form_metas"):
             c1, c2 = st.columns(2)
             eess_meta = c1.selectbox("Establecimiento de Salud", LISTA_EESS)
@@ -577,8 +593,12 @@ elif opcion == "⚙️ Configuración / Metas":
             btn_meta = st.form_submit_button("Guardar Meta", type="primary")
 
             if btn_meta:
+                init_db()
+                conn = sqlite3.connect('vancan_data.db')
+                c = conn.cursor()
                 c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_meta, meta_val))
                 conn.commit()
+                conn.close()
                 st.success(f"Meta guardada correctamente para {eess_meta}: {meta_val:,} canes")
                 st.rerun()
 
@@ -601,21 +621,22 @@ elif opcion == "⚙️ Configuración / Metas":
             )
 
             if st.button("💾 Guardar Cambios en Metas", type="primary"):
+                init_db()
+                conn = sqlite3.connect('vancan_data.db')
+                c = conn.cursor()
                 c.execute("DELETE FROM metas")
                 for _, r in df_m_edited.iterrows():
                     c.execute("INSERT INTO metas (id, eess, meta_canes) VALUES (?, ?, ?)", (r['id'], r['eess'], int(r['meta_canes'])))
                 conn.commit()
+                conn.close()
                 st.success("✅ Metas actualizadas correctamente.")
                 st.rerun()
         else:
             st.info("No hay metas manuales registradas aún en la base de datos.")
-        conn.close()
 
     # 2. TAB PERSONAL
     with tab_personal:
         st.subheader("➕ Agregar Nuevo Personal al Padrón")
-        conn = sqlite3.connect('vancan_data.db')
-        c = conn.cursor()
 
         with st.form("form_personal"):
             col_p1, col_p2 = st.columns(2)
@@ -625,13 +646,18 @@ elif opcion == "⚙️ Configuración / Metas":
 
             if btn_pers:
                 if nom_pers.strip():
+                    init_db()
+                    conn = sqlite3.connect('vancan_data.db')
+                    c = conn.cursor()
                     try:
                         c.execute("INSERT INTO personal_db (nombre, dni) VALUES (?, ?)", (nom_pers.strip(), dni_pers.strip()))
                         conn.commit()
                         st.success(f"✅ {nom_pers.strip()} agregado exitosamente al padrón.")
-                        st.rerun()
                     except sqlite3.IntegrityError:
                         st.error("⚠️ Este nombre ya existe en el padrón registrado.")
+                    finally:
+                        conn.close()
+                    st.rerun()
                 else:
                     st.error("⚠️ Ingrese un nombre válido.")
 
@@ -654,12 +680,15 @@ elif opcion == "⚙️ Configuración / Metas":
             )
 
             if st.button("💾 Guardar Cambios en Personal", type="primary"):
+                init_db()
+                conn = sqlite3.connect('vancan_data.db')
+                c = conn.cursor()
                 c.execute("DELETE FROM personal_db")
                 for _, r in df_p_edited.iterrows():
                     c.execute("INSERT INTO personal_db (id, nombre, dni) VALUES (?, ?, ?)", (r['id'], str(r['nombre']).strip(), str(r['dni']).strip()))
                 conn.commit()
+                conn.close()
                 st.success("✅ Padrón de personal actualizado correctamente.")
                 st.rerun()
         else:
-            st.info("Aún no has agregado personal manual a la DB. (Se están leyendo los del CSV).")
-        conn.close()
+            st.info("Aún no has agregado personal manual a la DB. (Se están leyendo los del CSV si existen).")
