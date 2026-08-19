@@ -35,7 +35,7 @@ def normalizar_texto(texto):
 # BASE DE DATOS SQLITE (INICIALIZACIÓN TOTAL)
 # ==========================================
 def init_db():
-    """Inicializa todas las tablas de la base de datos para evitar errores de consulta"""
+    """Inicializa todas las tablas e inserta los 4 EESS base si la tabla metas está vacía"""
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     
@@ -59,7 +59,7 @@ def init_db():
         )
     ''')
     
-    # Migración por si existe la columna antigua 'integrantes'
+    # Migración de compatibilidad
     c.execute("PRAGMA table_info(avances)")
     cols = [col[1] for col in c.fetchall()]
     if 'integrantes' in cols and 'integrante_1' not in cols:
@@ -67,7 +67,7 @@ def init_db():
         c.execute("ALTER TABLE avances ADD COLUMN integrante_2 TEXT")
         c.execute("UPDATE avances SET integrante_1 = integrantes")
     
-    # 2. Tabla de Metas
+    # 2. Tabla de Metas / Establecimientos
     c.execute('''
         CREATE TABLE IF NOT EXISTS metas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +75,17 @@ def init_db():
             meta_canes INTEGER
         )
     ''')
+
+    # Precarga inicial de los 4 Centros de Salud base si está vacía
+    c.execute("SELECT COUNT(*) FROM metas")
+    if c.fetchone()[0] == 0:
+        metas_iniciales = [
+            ("C.S. CESAR LOPEZ SILVA", 1400),
+            ("C.S. NANA", 2200),
+            ("C.S. MORON", 2800),
+            ("C.S. CHOSICA", 4000)
+        ]
+        c.executemany("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", metas_iniciales)
     
     # 3. Tabla de Personal
     c.execute('''
@@ -88,11 +99,11 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Se ejecuta siempre al arrancar el script
+# Inicialización al arrancar
 init_db()
 
 # ==========================================
-# FUNCIONES SQLITE BLINDADAS
+# FUNCIONES SQLITE Y CARGA DINÁMICA
 # ==========================================
 def cargar_datos():
     init_db()
@@ -115,6 +126,15 @@ def cargar_metas():
     finally:
         conn.close()
     return df
+
+def obtener_lista_eess_dinamica():
+    """Obtiene la lista viva de Establecimientos desde la tabla de Metas"""
+    df_m = cargar_metas()
+    if not df_m.empty and 'eess' in df_m.columns:
+        lista = sorted(df_m['eess'].dropna().astype(str).str.strip().unique().tolist())
+        if lista:
+            return lista
+    return ["C.S. CESAR LOPEZ SILVA", "C.S. NANA", "C.S. MORON", "C.S. CHOSICA"]
 
 def cargar_personal_db():
     init_db()
@@ -191,17 +211,13 @@ def vaciar_base_datos_db():
 # CARGA DE DATOS COMPLEMENTARIOS (CSV + DB)
 # ==========================================
 def cargar_personal_completo():
-    """Combina datos de PERSONAL.csv con los registrados en la DB"""
     personal_set = set()
-    
-    # 1. Desde la base de datos
     df_p = cargar_personal_db()
     if not df_p.empty and 'nombre' in df_p.columns:
         for n in df_p['nombre'].dropna().astype(str).tolist():
             if n.strip():
                 personal_set.add(n.strip())
 
-    # 2. Desde el archivo CSV
     archivos = ['PERSONAL.csv', 'personal.csv', 'Personal.csv', 'PERSONAL.CSV']
     for archivo in archivos:
         if os.path.exists(archivo):
@@ -225,7 +241,6 @@ def cargar_personal_completo():
     return resultado if resultado else ["Tec. Jorge Campos", "Lic. Jorge Vasquez", "Tec. Marina Galan"]
 
 def cargar_zonas_csv():
-    """Lee ZONAS.csv trayendo las zonas dinámicamente"""
     archivos = ['ZONAS.csv', 'zonas.csv', 'Zonas.csv', 'ZONAS.CSV']
     for archivo in archivos:
         if os.path.exists(archivo):
@@ -253,49 +268,17 @@ def cargar_zonas_csv():
 
 LISTA_PERSONAL = cargar_personal_completo()
 LISTA_ZONAS = cargar_zonas_csv()
-LISTA_EESS = ["C.S. CESAR LOEPZ SILVA", "C.S. NAÑA", "C.S. MORON", "C.S. CHOSICA"]
+LISTA_EESS_DINAMICA = obtener_lista_eess_dinamica()
 LISTA_TURNOS = ["Mañana", "Tarde"]
 LISTA_BRIGADAS = [f"Brigada {i:02d}" for i in range(1, 21)]
 
-def obtener_metas_csv():
-    metas_dict = {
-        "CS CESAR LOPEZ SILVA": 1400,
-        "CS NANA": 2200,
-        "CS MORON": 2800,
-        "CS CHOSICA": 4000
-    }
-    archivos_posibles = ['METAS.csv', 'metas.csv', 'Metas.csv']
-    for archivo in archivos_posibles:
-        if os.path.exists(archivo):
-            try:
-                df = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8')
-                col_eess, col_meta = None, None
-                for c in df.columns:
-                    c_upper = normalizar_texto(c)
-                    if c_upper in ['EESS', 'ESTABLECIMIENTO', 'ESTABLECIMIENTOS', 'CENTRO DE SALUD']:
-                        col_eess = c
-                    elif c_upper in ['META CANES', 'META', 'DOSIS', 'CANES']:
-                        col_meta = c
-                if col_eess and col_meta:
-                    for _, row in df.iterrows():
-                        metas_dict[normalizar_texto(row[col_eess])] = int(row[col_meta])
-            except Exception as e:
-                print(f"Error meta CSV: {e}")
-    return metas_dict
-
-def obtener_meta_establecimiento(eess_nombre, mapa_metas):
-    eess_norm = normalizar_texto(eess_nombre)
-    if eess_norm in mapa_metas:
-        return mapa_metas[eess_norm]
-    if "CESAR" in eess_norm or "LOPEZ" in eess_norm or "LOEPZ" in eess_norm or "SILVA" in eess_norm:
-        return mapa_metas.get("CS CESAR LOPEZ SILVA", 1400)
-    elif "NANA" in eess_norm:
-        return mapa_metas.get("CS NANA", 2200)
-    elif "MORON" in eess_norm:
-        return mapa_metas.get("CS MORON", 2800)
-    elif "CHOSICA" in eess_norm:
-        return mapa_metas.get("CS CHOSICA", 4000)
-    return 1000
+def obtener_mapa_metas_db():
+    df_m = cargar_metas()
+    mapa = {}
+    if not df_m.empty:
+        for _, r in df_m.iterrows():
+            mapa[normalizar_texto(r['eess'])] = int(r['meta_canes'])
+    return mapa
 
 # ==========================================
 # NAVEGACIÓN Y MENÚ LATERAL
@@ -321,11 +304,13 @@ if opcion == "📝 Registrar Avance Diario":
     st.header("📝 Registro de Avances Diario de Vacunación Canina")
     st.caption("Completa el formulario seleccionando al Integrante 1 e Integrante 2 de la brigada.")
 
+    lista_eess_activa = obtener_lista_eess_dinamica()
+
     with st.form("form_registro", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         with col1:
             fecha_input = st.date_input("Fecha de Actividad", datetime.now())
-            eess_input = st.selectbox("Establecimiento de Salud (EESS)", LISTA_EESS)
+            eess_input = st.selectbox("Establecimiento de Salud (EESS)", lista_eess_activa)
             turno_input = st.selectbox("Turno", LISTA_TURNOS)
         
         with col2:
@@ -377,7 +362,7 @@ if opcion == "📝 Registrar Avance Diario":
             cols_presentes = [c for c in columnas_ordenadas if c in df_mostrar.columns]
             df_mostrar = df_mostrar[cols_presentes]
 
-            opts_eess = sorted(list(set(LISTA_EESS + df_mostrar['eess'].dropna().astype(str).tolist())))
+            opts_eess = sorted(list(set(lista_eess_activa + df_mostrar['eess'].dropna().astype(str).tolist())))
             opts_turno = sorted(list(set(LISTA_TURNOS + df_mostrar['turno'].dropna().astype(str).tolist())))
             opts_brigada = sorted(list(set(LISTA_BRIGADAS + df_mostrar['brigada'].dropna().astype(str).tolist())))
             opts_zona = sorted(list(set(LISTA_ZONAS + df_mostrar['zona'].dropna().astype(str).tolist())))
@@ -448,17 +433,13 @@ elif opcion == "📊 Dashboard y Vacunómetro":
             st.rerun()
 
     df = cargar_datos()
-    df_metas_db = cargar_metas()
-    mapa_metas = obtener_metas_csv()
-    if not df_metas_db.empty:
-        for _, r in df_metas_db.iterrows():
-            mapa_metas[normalizar_texto(r['eess'])] = int(r['meta_canes'])
+    mapa_metas = obtener_mapa_metas_db()
+    lista_eess_activa = obtener_lista_eess_dinamica()
 
     st.subheader("🔍 Filtros de Visualización")
     f1, f2, f3 = st.columns(3)
     
-    eess_disponibles = LISTA_EESS
-    eess_sel = f1.multiselect("Establecimiento de Salud", eess_disponibles, default=eess_disponibles)
+    eess_sel = f1.multiselect("Establecimiento de Salud", lista_eess_activa, default=lista_eess_activa)
     
     zonas_disponibles = sorted(list(set(df['zona'].unique().tolist() + LISTA_ZONAS))) if not df.empty else LISTA_ZONAS
     turnos_disponibles = df['turno'].unique().tolist() if not df.empty else LISTA_TURNOS
@@ -473,7 +454,7 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         df_f = pd.DataFrame()
         total_vacunados = 0
 
-    meta_filtrada = sum([obtener_meta_establecimiento(e, mapa_metas) for e in eess_sel])
+    meta_filtrada = sum([mapa_metas.get(normalizar_texto(e), 1000) for e in eess_sel])
     pct_avance = (total_vacunados / meta_filtrada * 100) if meta_filtrada > 0 else 0.0
 
     st.markdown("---")
@@ -513,10 +494,7 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         with g1:
             st.markdown("### 📅 Avance Diario de Vacunación")
             
-            # --- CONVERSIÓN DE FECHAS SECTORIZADA Y ROBUSTA ---
             df_diario = df_f.groupby('fecha')['dosis'].sum().reset_index()
-            
-            # Parseo con tolerancia a formatos mixtos y errores coercitivos
             df_diario['fecha_clean'] = pd.to_datetime(df_diario['fecha'], errors='coerce', format='mixed')
             df_diario = df_diario.dropna(subset=['fecha_clean'])
             df_diario['fecha_str'] = df_diario['fecha_clean'].dt.strftime('%Y-%m-%d')
@@ -584,33 +562,42 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 # ==========================================
 elif opcion == "⚙️ Configuración / Metas":
     st.header("⚙️ Configuración del Sistema")
-    st.caption("Administra las Metas por Establecimiento y el Padrón de Personal.")
+    st.caption("Administra dinámicamente las Metas por Centro de Salud y el Padrón de Personal.")
 
-    tab_metas, tab_personal = st.tabs(["🎯 Gestor de Metas", "👥 Gestor de Personal"])
+    tab_metas, tab_personal = st.tabs(["🎯 Gestor de Centros de Salud y Metas", "👥 Gestor de Personal"])
 
-    # 1. TAB METAS
+    # 1. TAB METAS Y CENTROS DE SALUD (ALTAMENTE ESCALABLE)
     with tab_metas:
-        st.subheader("➕ Agregar / Actualizar Meta")
+        st.subheader("➕ Agregar Nuevo Centro de Salud y Meta")
+        st.caption("Escribe un nuevo Centro de Salud para registrarlo de forma inmediata en todo el sistema.")
         
-        with st.form("form_metas"):
+        with st.form("form_metas_nuevo"):
             c1, c2 = st.columns(2)
-            eess_meta = c1.selectbox("Establecimiento de Salud", LISTA_EESS)
-            meta_val = c2.number_input("Meta de Canes", min_value=1, value=1400, step=50)
-            btn_meta = st.form_submit_button("Guardar Meta", type="primary")
+            eess_nuevo_input = c1.text_input("Nombre del Centro de Salud / EESS", placeholder="Ej. C.S. MOYOPAMPA")
+            meta_val_nuevo = c2.number_input("Meta de Canes", min_value=1, value=1500, step=50)
+            btn_meta_nuevo = st.form_submit_button("➕ Registrar Centro de Salud", type="primary")
 
-            if btn_meta:
-                init_db()
-                conn = sqlite3.connect('vancan_data.db')
-                c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_meta, meta_val))
-                conn.commit()
-                conn.close()
-                st.success(f"Meta guardada correctamente para {eess_meta}: {meta_val:,} canes")
-                st.rerun()
+            if btn_meta_nuevo:
+                eess_norm = normalizar_texto(eess_nuevo_input)
+                if eess_norm:
+                    init_db()
+                    conn = sqlite3.connect('vancan_data.db')
+                    c = conn.cursor()
+                    try:
+                        c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", (eess_norm, meta_val_nuevo))
+                        conn.commit()
+                        st.success(f"✅ {eess_norm} guardado correctamente con meta de {meta_val_nuevo:,} canes.")
+                    except sqlite3.IntegrityError:
+                        st.error(f"⚠️ El Centro de Salud '{eess_norm}' ya está registrado. Puedes editarlo en la tabla inferior.")
+                    finally:
+                        conn.close()
+                    st.rerun()
+                else:
+                    st.error("⚠️ Ingrese un nombre válido de Centro de Salud.")
 
         st.markdown("---")
-        st.subheader("📋 Metas Registradas (Editable)")
-        st.caption("Puedes editar o eliminar registros directamente en la tabla.")
+        st.subheader("📋 Lista de Centros de Salud y Metas Registradas (Editable y Eliminable)")
+        st.caption("Puedes modificar los nombres o metas en la tabla, o seleccionar un registro para eliminarlo.")
         
         df_m = cargar_metas()
         if not df_m.empty:
@@ -618,7 +605,7 @@ elif opcion == "⚙️ Configuración / Metas":
                 df_m,
                 column_config={
                     "id": st.column_config.NumberColumn("ID", disabled=True),
-                    "eess": st.column_config.SelectboxColumn("Establecimiento", options=LISTA_EESS, required=True),
+                    "eess": st.column_config.TextColumn("Centro de Salud / EESS", required=True),
                     "meta_canes": st.column_config.NumberColumn("Meta Canes", min_value=1, step=10, required=True)
                 },
                 use_container_width=True,
@@ -626,19 +613,37 @@ elif opcion == "⚙️ Configuración / Metas":
                 key="editor_metas"
             )
 
-            if st.button("💾 Guardar Cambios en Metas", type="primary"):
-                init_db()
-                conn = sqlite3.connect('vancan_data.db')
-                c = conn.cursor()
-                c.execute("DELETE FROM metas")
-                for _, r in df_m_edited.iterrows():
-                    c.execute("INSERT INTO metas (id, eess, meta_canes) VALUES (?, ?, ?)", (r['id'], r['eess'], int(r['meta_canes'])))
-                conn.commit()
-                conn.close()
-                st.success("✅ Metas actualizadas correctamente.")
-                st.rerun()
+            col_save_m, col_del_m = st.columns([1, 1])
+            with col_save_m:
+                if st.button("💾 Guardar Cambios en Centros y Metas", type="primary", use_container_width=True):
+                    init_db()
+                    conn = sqlite3.connect('vancan_data.db')
+                    c = conn.cursor()
+                    c.execute("DELETE FROM metas")
+                    for _, r in df_m_edited.iterrows():
+                        eess_norm_edit = normalizar_texto(r['eess'])
+                        if eess_norm_edit:
+                            c.execute("INSERT OR REPLACE INTO metas (id, eess, meta_canes) VALUES (?, ?, ?)", (r['id'], eess_norm_edit, int(r['meta_canes'])))
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ Centros de Salud y Metas actualizados correctamente.")
+                    st.rerun()
+
+            with col_del_m:
+                with st.expander("🗑️ Eliminar un Centro de Salud"):
+                    lista_del_eess = df_m['eess'].tolist()
+                    eess_a_borrar = st.selectbox("Seleccionar EESS a borrar:", lista_del_eess)
+                    if st.button("❌ Confirmar Borrado de EESS"):
+                        init_db()
+                        conn = sqlite3.connect('vancan_data.db')
+                        c = conn.cursor()
+                        c.execute("DELETE FROM metas WHERE eess = ?", (eess_a_borrar,))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"Centro de salud '{eess_a_borrar}' eliminado.")
+                        st.rerun()
         else:
-            st.info("No hay metas manuales registradas aún en la base de datos.")
+            st.info("No hay centros de salud ni metas registradas en la base de datos.")
 
     # 2. TAB PERSONAL
     with tab_personal:
