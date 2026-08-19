@@ -20,78 +20,67 @@ st.set_page_config(
 # FUNCIONES AUXILIARES DE TEXTO
 # ==========================================
 def normalizar_texto(texto):
-    """Convierte texto a mayúsculas y limpia acentos para homogeneizar la DB"""
+    """Convierte texto a mayúsculas, limpia acentos y espacios dobles"""
     if pd.isna(texto) or texto is None:
         return ""
     texto = str(texto).upper().strip()
     replacements = (("Á", "A"), ("É", "E"), ("Í", "I"), ("Ó", "O"), ("Ú", "U"))
     for a, b in replacements:
         texto = texto.replace(a, b)
-    texto = re.sub(r'[^A-Z0-9\s]', '', texto)
-    return re.sub(r'\s+', ' ', texto)
+    texto = re.sub(r'[^A-Z0-9\s\.]', '', texto)
+    return re.sub(r'\s+', ' ', texto).strip()
 
 # ==========================================
-# CARGA AUTOMÁTICA E INTELIGENTE DE PERSONAL.CSV
+# LECTURA ROBUSTA DE PERSONAL.CSV
 # ==========================================
 def sincronizar_personal_csv():
-    """Lee personal.csv detectando automáticamente los nombres de las columnas"""
+    """Lee personal.csv probando multiples codificaciones y delimitadores"""
     if os.path.exists('personal.csv'):
-        try:
-            # Detectar separador común (coma o punto y coma)
-            df_csv = None
-            for sep in [',', ';', '\t']:
+        df_csv = None
+        # Probar codificaciones y delimitadores comunes
+        for encoding in ['utf-8', 'utf-8-sig', 'latin1', 'cp1252', 'iso-8859-1']:
+            for sep in [',', ';', '\t', '|']:
                 try:
-                    temp_df = pd.read_csv('personal.csv', sep=sep)
+                    temp_df = pd.read_csv('personal.csv', encoding=encoding, sep=sep)
                     if len(temp_df.columns) >= 1 and len(temp_df) > 0:
                         df_csv = temp_df
                         break
                 except Exception:
                     continue
+            if df_csv is not None:
+                break
 
-            if df_csv is not None and not df_csv.empty:
-                # 1. Identificar columna de nombres
-                col_nombre = None
-                for col in df_csv.columns:
-                    col_upper = str(col).upper()
-                    if any(k in col_upper for k in ['NOMB', 'PERS', 'INTEG', 'TRABAJ', 'EMPLEA', 'APELLID']):
-                        col_nombre = col
-                        break
-                if not col_nombre:
-                    col_nombre = df_csv.columns[0] # Tomar la primera columna si no encuentra coincidencia
+        if df_csv is not None and not df_csv.empty:
+            # Detectar columna de nombre
+            col_nombre = None
+            for col in df_csv.columns:
+                c_up = str(col).upper()
+                if any(k in c_up for k in ['NOMB', 'PERS', 'INTEG', 'TRABAJ', 'EMPLEA', 'APELLID']):
+                    col_nombre = col
+                    break
+            if not col_nombre:
+                col_nombre = df_csv.columns[0]
 
-                # 2. Identificar columna de cargo
-                col_cargo = None
-                for col in df_csv.columns:
-                    if any(k in str(col).upper() for k in ['CARG', 'PROF', 'FUNCI']):
-                        col_cargo = col
-                        break
+            col_cargo = next((c for c in df_csv.columns if any(k in str(c).upper() for k in ['CARG', 'PROF', 'FUNCI'])), None)
+            col_dni = next((c for c in df_csv.columns if any(k in str(c).upper() for k in ['DNI', 'DOC', 'CEDULA'])), None)
 
-                # 3. Identificar columna DNI
-                col_dni = None
-                for col in df_csv.columns:
-                    if any(k in str(col).upper() for k in ['DNI', 'DOC', 'CEDULA']):
-                        col_dni = col
-                        break
+            conn = sqlite3.connect('vancan_data.db')
+            c = conn.cursor()
+            for _, row in df_csv.iterrows():
+                nom = normalizar_texto(row.get(col_nombre, ''))
+                car = normalizar_texto(row.get(col_cargo, 'TÉCNICO')) if col_cargo else 'TÉCNICO'
+                dni = str(row.get(col_dni, '')).strip() if col_dni else ''
 
-                conn = sqlite3.connect('vancan_data.db')
-                c = conn.cursor()
-                for _, row in df_csv.iterrows():
-                    nom = normalizar_texto(row.get(col_nombre, ''))
-                    car = normalizar_texto(row.get(col_cargo, 'TÉCNICO')) if col_cargo else 'TÉCNICO'
-                    dni = str(row.get(col_dni, '')).strip() if col_dni else ''
-                    
-                    if car == "":
-                        car = "TÉCNICO"
+                if not car:
+                    car = 'TÉCNICO'
 
-                    if nom and len(nom) > 2:
-                        c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom, car, dni))
-                conn.commit()
-                conn.close()
-        except Exception as e:
-            st.error(f"Error leyendo personal.csv: {e}")
+                if nom and len(nom) >= 3:
+                    c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom, car, dni))
+            conn.commit()
+            conn.close()
 
 # ==========================================
-# INICIALIZACIÓN DE BASE DE DATOS
+# INICIALIZACIÓN Y AUTO-DEPURACIÓN DE BASE DE DATOS
 # ==========================================
 def init_db():
     conn = sqlite3.connect('vancan_data.db')
@@ -123,13 +112,27 @@ def init_db():
     if 'dni' not in cols_personal:
         c.execute("ALTER TABLE personal_db ADD COLUMN dni TEXT DEFAULT ''")
 
+    # Limpieza automática de duplicados existentes
+    c.execute("SELECT nombre, cargo, dni FROM personal_db")
+    registros_actuales = c.fetchall()
+    if registros_actuales:
+        mapa_limpio = {}
+        for nom, car, dni in registros_actuales:
+            nom_norm = normalizar_texto(nom)
+            if nom_norm and nom_norm not in mapa_limpio:
+                mapa_limpio[nom_norm] = (normalizar_texto(car) or 'TÉCNICO', str(dni or '').strip())
+        
+        c.execute("DELETE FROM personal_db")
+        for nom_norm, (car, dni) in mapa_limpio.items():
+            c.execute("INSERT INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom_norm, car, dni))
+
     conn.commit()
     conn.close()
 
-    # Sincronizar desde CSV al iniciar
+    # Importar desde CSV si existe
     sincronizar_personal_csv()
 
-    # Si sigue vacía, agregar registros por defecto
+    # Si la base sigue vacía, registrar equipo base por defecto
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM personal_db")
@@ -137,7 +140,11 @@ def init_db():
         personal_inicial = [
             ("TEC. JORGE CAMPOS", "TÉCNICO", ""),
             ("LIC. ETHEL ROSALES", "ENFERMERA", ""),
-            ("TEC. MARINA GALAN", "TÉCNICO", "")
+            ("TEC. MARINA GALAN", "TÉCNICO", ""),
+            ("LIC. SARA ZEVALLOS", "ENFERMERA", ""),
+            ("LIC. AMANDA SILVA", "ENFERMERA", ""),
+            ("TEC. ANGELA QUISPE", "TÉCNICO", ""),
+            ("TEC. VIOLETA FLORES", "TÉCNICO", "")
         ]
         c.executemany("INSERT OR IGNORE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", personal_inicial)
 
@@ -233,10 +240,11 @@ def obtener_eess_activos():
 def obtener_personal_activo():
     df = cargar_personal()
     if not df.empty and 'nombre' in df.columns:
-        lista = [str(x).strip() for x in df['nombre'].dropna().unique() if str(x).strip() != ""]
-        if lista:
-            return sorted(lista)
-    return ["TEC. JORGE CAMPOS"]
+        lista = [normalizar_texto(x) for x in df['nombre'].dropna() if normalizar_texto(x) != ""]
+        unicos = sorted(list(set(lista)))
+        if unicos:
+            return unicos
+    return ["TEC. JORGE CAMPOS", "LIC. ETHEL ROSALES", "TEC. MARINA GALAN"]
 
 LISTA_ZONAS = ["ROBLES", "ROCAS", "ROSALEDA", "ROSARIO", "ROSAS", "SAN BARTOLOME", "SAN JOSE", "SANTA INES"]
 LISTA_TURNOS = ["Mañana", "Tarde"]
@@ -421,13 +429,12 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
         
         if uploaded_csv is not None:
             try:
-                df_up = pd.read_csv(uploaded_csv)
-                st.write("Vista previa:", df_up.head(3))
-                if st.button("📥 Importar a Base de Datos"):
-                    df_up.to_csv("personal.csv", index=False)
-                    sincronizar_personal_csv()
-                    st.success("✅ Personal sincronizado exitosamente.")
-                    st.rerun()
+                # Guardar copia en disco y sincronizar
+                with open("personal.csv", "wb") as f:
+                    f.write(uploaded_csv.getbuffer())
+                sincronizar_personal_csv()
+                st.success("✅ Archivo procesado y padrón actualizado correctamente.")
+                st.rerun()
             except Exception as ex:
                 st.error(f"Error al procesar archivo: {ex}")
 
