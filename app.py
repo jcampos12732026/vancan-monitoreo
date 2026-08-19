@@ -29,54 +29,35 @@ def normalizar_texto(texto):
     return re.sub(r'\s+', ' ', texto)
 
 # ==========================================
-# AUTORREPARACIÓN Y MIGRACIÓN DE ESTRUCTURA DB
+# INICIALIZACIÓN SEGURA DE BASE DE DATOS
 # ==========================================
-def reparar_y_migrar_db():
-    """Garantiza que la base de datos tenga las columnas 'id' en todas las tablas."""
+def init_db():
     conn = sqlite3.connect('vancan_data.db')
     c = conn.cursor()
     
-    # 1. Reparar Tabla 'metas'
-    c.execute("CREATE TABLE IF NOT EXISTS metas (eess TEXT UNIQUE, meta_canes INTEGER)")
-    c.execute("PRAGMA table_info(metas)")
-    cols_metas = [col[1] for col in c.fetchall()]
-    
-    if 'id' not in cols_metas:
-        c.execute("ALTER TABLE metas RENAME TO metas_old")
-        c.execute('''
-            CREATE TABLE metas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                eess TEXT UNIQUE,
-                meta_canes INTEGER
-            )
-        ''')
-        c.execute("INSERT OR IGNORE INTO metas (eess, meta_canes) SELECT eess, meta_canes FROM metas_old")
-        c.execute("DROP TABLE metas_old")
+    # Tabla Metas
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS metas (
+            eess TEXT PRIMARY KEY,
+            meta_canes INTEGER
+        )
+    ''')
 
-    # Precarga inicial en metas si está vacía
+    # Precarga inicial metas
     c.execute("SELECT COUNT(*) FROM metas")
     if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", ("C.S. CESAR LOPEZ SILVA", 1400))
+        c.execute("INSERT OR IGNORE INTO metas (eess, meta_canes) VALUES (?, ?)", ("C.S. CESAR LOPEZ SILVA", 1400))
 
-    # 2. Reparar Tabla 'personal_db'
-    c.execute("CREATE TABLE IF NOT EXISTS personal_db (nombre TEXT UNIQUE, cargo TEXT, dni TEXT)")
-    c.execute("PRAGMA table_info(personal_db)")
-    cols_personal = [col[1] for col in c.fetchall()]
-    
-    if 'id' not in cols_personal:
-        c.execute("ALTER TABLE personal_db RENAME TO personal_old")
-        c.execute('''
-            CREATE TABLE personal_db (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT UNIQUE,
-                cargo TEXT,
-                dni TEXT
-            )
-        ''')
-        c.execute("INSERT OR IGNORE INTO personal_db (nombre, cargo, dni) SELECT nombre, cargo, dni FROM personal_old")
-        c.execute("DROP TABLE personal_old")
+    # Tabla Personal
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS personal_db (
+            nombre TEXT PRIMARY KEY,
+            cargo TEXT,
+            dni TEXT
+        )
+    ''')
 
-    # Precarga inicial en personal si está vacía
+    # Precarga inicial personal
     c.execute("SELECT COUNT(*) FROM personal_db")
     if c.fetchone()[0] == 0:
         personal_inicial = [
@@ -84,9 +65,9 @@ def reparar_y_migrar_db():
             ("LIC. ETHEL ROSALES", "ENFERMERA", ""),
             ("TEC. MARINA GALAN", "TÉCNICO", "")
         ]
-        c.executemany("INSERT INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", personal_inicial)
+        c.executemany("INSERT OR IGNORE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", personal_inicial)
 
-    # 3. Tabla de Avances
+    # Tabla Avances
     c.execute('''
         CREATE TABLE IF NOT EXISTS avances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,43 +89,10 @@ def reparar_y_migrar_db():
     conn.commit()
     conn.close()
 
-def reindexar_tabla(nombre_tabla):
-    """
-    Reorganiza los IDs de una tabla desde el 1 consecutivamente (1, 2, 3...)
-    """
-    conn = sqlite3.connect('vancan_data.db')
-    c = conn.cursor()
-    
-    if nombre_tabla == "metas":
-        c.execute("SELECT eess, meta_canes FROM metas ORDER BY id ASC")
-        registros = c.fetchall()
-        c.execute("DELETE FROM metas")
-        try:
-            c.execute("DELETE FROM sqlite_sequence WHERE name='metas'")
-        except sqlite3.OperationalError:
-            pass
-        for item in registros:
-            c.execute("INSERT INTO metas (eess, meta_canes) VALUES (?, ?)", item)
-            
-    elif nombre_tabla == "personal_db":
-        c.execute("SELECT nombre, cargo, dni FROM personal_db ORDER BY id ASC")
-        registros = c.fetchall()
-        c.execute("DELETE FROM personal_db")
-        try:
-            c.execute("DELETE FROM sqlite_sequence WHERE name='personal_db'")
-        except sqlite3.OperationalError:
-            pass
-        for item in registros:
-            c.execute("INSERT INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", item)
-            
-    conn.commit()
-    conn.close()
-
-# Ejecutamos la migración previa
-reparar_y_migrar_db()
+init_db()
 
 # ==========================================
-# FUNCIONES DE CONSULTA SEGURA
+# FUNCIONES DE CONSULTA Y MANTENIMIENTO
 # ==========================================
 def cargar_avances():
     conn = sqlite3.connect('vancan_data.db')
@@ -154,26 +102,20 @@ def cargar_avances():
 
 def cargar_metas():
     conn = sqlite3.connect('vancan_data.db')
-    try:
-        df = pd.read_sql_query("SELECT id, eess, meta_canes FROM metas ORDER BY id ASC", conn)
-    except Exception:
-        conn.close()
-        reparar_y_migrar_db()
-        conn = sqlite3.connect('vancan_data.db')
-        df = pd.read_sql_query("SELECT id, eess, meta_canes FROM metas ORDER BY id ASC", conn)
+    df = pd.read_sql_query("SELECT eess, meta_canes FROM metas ORDER BY eess ASC", conn)
     conn.close()
+    # Generamos el ID correlativo dinámicamente en Python para la interfaz visual
+    if not df.empty:
+        df.insert(0, 'ID', range(1, len(df) + 1))
     return df
 
 def cargar_personal():
     conn = sqlite3.connect('vancan_data.db')
-    try:
-        df = pd.read_sql_query("SELECT id, nombre, cargo, dni FROM personal_db ORDER BY id ASC", conn)
-    except Exception:
-        conn.close()
-        reparar_y_migrar_db()
-        conn = sqlite3.connect('vancan_data.db')
-        df = pd.read_sql_query("SELECT id, nombre, cargo, dni FROM personal_db ORDER BY id ASC", conn)
+    df = pd.read_sql_query("SELECT nombre, cargo, dni FROM personal_db ORDER BY nombre ASC", conn)
     conn.close()
+    # Generamos el ID correlativo dinámicamente en Python para la interfaz visual
+    if not df.empty:
+        df.insert(0, 'ID', range(1, len(df) + 1))
     return df
 
 def guardar_avance(fecha, eess, turno, brigada, integ1, integ2, resp, zona, dosis, obs, usuario):
@@ -189,13 +131,13 @@ def guardar_avance(fecha, eess, turno, brigada, integ1, integ2, resp, zona, dosi
 
 def obtener_eess_activos():
     df = cargar_metas()
-    if not df.empty:
+    if not df.empty and 'eess' in df.columns:
         return sorted(df['eess'].tolist())
     return ["C.S. CESAR LOPEZ SILVA"]
 
 def obtener_personal_activo():
     df = cargar_personal()
-    if not df.empty:
+    if not df.empty and 'nombre' in df.columns:
         return sorted(df['nombre'].tolist())
     return ["TEC. JORGE CAMPOS"]
 
@@ -336,15 +278,13 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                         st.error("⚠️ El establecimiento ya existe en la base de datos.")
                     finally:
                         conn.close()
-                    
-                    reindexar_tabla("metas")
                     st.rerun()
                 else:
                     st.error("⚠️ Ingrese un nombre válido.")
 
         st.markdown("---")
-        st.subheader("📋 2. Mantenimiento de Establecimientos y Metas (Edición y Eliminación)")
-        st.caption("Modifica la información directamente en las celdas de la tabla y haz clic en 'Guardar Cambios'. Para borrar, utiliza la sección inferior.")
+        st.subheader("📋 2. Mantenimiento de Establecimientos y Metas")
+        st.caption("Edita los valores en la tabla o elimina un registro en la sección inferior.")
 
         df_metas_db = cargar_metas()
 
@@ -352,7 +292,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
             df_metas_edited = st.data_editor(
                 df_metas_db,
                 column_config={
-                    "id": st.column_config.NumberColumn("ID (Correlativo)", disabled=True),
+                    "ID": st.column_config.NumberColumn("N°", disabled=True),
                     "eess": st.column_config.TextColumn("Centro de Salud / EESS", required=True),
                     "meta_canes": st.column_config.NumberColumn("Meta Canes", min_value=1, step=10, required=True)
                 },
@@ -367,14 +307,13 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                 if st.button("💾 Guardar Cambios en EESS", type="primary", use_container_width=True):
                     conn = sqlite3.connect('vancan_data.db')
                     c = conn.cursor()
+                    # Reemplazamos datos basándonos en eess
                     for _, row in df_metas_edited.iterrows():
                         e_norm = normalizar_texto(row['eess'])
                         if e_norm:
-                            c.execute("UPDATE metas SET eess = ?, meta_canes = ? WHERE id = ?", (e_norm, int(row['meta_canes']), int(row['id'])))
+                            c.execute("UPDATE metas SET meta_canes = ? WHERE eess = ?", (int(row['meta_canes']), e_norm))
                     conn.commit()
                     conn.close()
-                    
-                    reindexar_tabla("metas")
                     st.success("✅ Establecimientos y metas actualizados correctamente.")
                     st.rerun()
 
@@ -387,9 +326,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                         c.execute("DELETE FROM metas WHERE eess = ?", (eess_borrar,))
                         conn.commit()
                         conn.close()
-                        
-                        reindexar_tabla("metas")
-                        st.success(f"Establecimiento {eess_borrar} eliminado y los IDs fueron reindexados.")
+                        st.success(f"Establecimiento {eess_borrar} eliminado.")
                         st.rerun()
         else:
             st.info("No hay centros de salud registrados.")
@@ -419,15 +356,13 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                         st.error("⚠️ Este trabajador ya está registrado en el padrón.")
                     finally:
                         conn.close()
-                    
-                    reindexar_tabla("personal_db")
                     st.rerun()
                 else:
                     st.error("⚠️ Ingrese un nombre válido.")
 
         st.markdown("---")
-        st.subheader("📋 2. Padrón de Personal Registrado (Edición y Eliminación)")
-        st.caption("Edita los nombres o cargos en la tabla y presiona 'Guardar Cambios'. Para retirar trabajadores, usa el panel desplegable.")
+        st.subheader("📋 2. Padrón de Personal Registrado")
+        st.caption("Edita la información en la tabla y guarda los cambios o elimina registros usando la opción desplegable.")
 
         df_personal_db = cargar_personal()
 
@@ -435,7 +370,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
             df_personal_edited = st.data_editor(
                 df_personal_db,
                 column_config={
-                    "id": st.column_config.NumberColumn("ID (Correlativo)", disabled=True),
+                    "ID": st.column_config.NumberColumn("N°", disabled=True),
                     "nombre": st.column_config.TextColumn("Nombre y Apellido", required=True),
                     "cargo": st.column_config.SelectboxColumn("Cargo", options=["TÉCNICO", "ENFERMERA", "MÉDICO VETERINARIO", "DIGITADOR", "OTRO"]),
                     "dni": st.column_config.TextColumn("DNI")
@@ -454,12 +389,10 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                     for _, row in df_personal_edited.iterrows():
                         nom_norm = normalizar_texto(row['nombre'])
                         if nom_norm:
-                            c.execute("UPDATE personal_db SET nombre = ?, cargo = ?, dni = ? WHERE id = ?", 
-                                      (nom_norm, row['cargo'], str(row['dni']) if pd.notna(row['dni']) else "", int(row['id'])))
+                            c.execute("UPDATE personal_db SET cargo = ?, dni = ? WHERE nombre = ?", 
+                                      (row['cargo'], str(row['dni']) if pd.notna(row['dni']) else "", nom_norm))
                     conn.commit()
                     conn.close()
-                    
-                    reindexar_tabla("personal_db")
                     st.success("✅ Padrón de personal actualizado correctamente.")
                     st.rerun()
 
@@ -472,9 +405,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                         c.execute("DELETE FROM personal_db WHERE nombre = ?", (pers_borrar,))
                         conn.commit()
                         conn.close()
-                        
-                        reindexar_tabla("personal_db")
-                        st.success(f"Trabajador {pers_borrar} eliminado y los IDs fueron reindexados.")
+                        st.success(f"Trabajador {pers_borrar} eliminado.")
                         st.rerun()
         else:
             st.info("No hay personal registrado en la base de datos.")
