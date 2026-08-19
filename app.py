@@ -88,7 +88,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Se ejecuta al arrancar el script siempre
+# Se ejecuta siempre al arrancar el script
 init_db()
 
 # ==========================================
@@ -512,16 +512,22 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
         with g1:
             st.markdown("### 📅 Avance Diario de Vacunación")
+            
+            # --- CONVERSIÓN DE FECHAS SECTORIZADA Y ROBUSTA ---
             df_diario = df_f.groupby('fecha')['dosis'].sum().reset_index()
-            df_diario['fecha'] = pd.to_datetime(df_diario['fecha']).dt.strftime('%Y-%m-%d')
-            df_diario = df_diario.sort_values('fecha')
+            
+            # Parseo con tolerancia a formatos mixtos y errores coercitivos
+            df_diario['fecha_clean'] = pd.to_datetime(df_diario['fecha'], errors='coerce', format='mixed')
+            df_diario = df_diario.dropna(subset=['fecha_clean'])
+            df_diario['fecha_str'] = df_diario['fecha_clean'].dt.strftime('%Y-%m-%d')
+            df_diario = df_diario.sort_values('fecha_clean')
 
             fig_diario = px.bar(
                 df_diario, 
-                x='fecha', 
+                x='fecha_str', 
                 y='dosis', 
                 text='dosis',
-                labels={'fecha': 'Fecha', 'dosis': 'Canes Vacunados'},
+                labels={'fecha_str': 'Fecha', 'dosis': 'Canes Vacunados'},
                 title="Producción Total por Día",
                 color_discrete_sequence=['#006699']
             )
