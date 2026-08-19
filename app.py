@@ -17,11 +17,11 @@ st.set_page_config(
 )
 
 # ==========================================
-# FUNCIONES AUXILIARES
+# FUNCIONES AUXILIARES DE TEXTO
 # ==========================================
 def normalizar_texto(texto):
     """Convierte texto a mayúsculas y limpia acentos para homogeneizar la DB"""
-    if not texto or pd.isna(texto):
+    if pd.isna(texto) or texto is None:
         return ""
     texto = str(texto).upper().strip()
     replacements = (("Á", "A"), ("É", "E"), ("Í", "I"), ("Ó", "O"), ("Ú", "U"))
@@ -31,7 +31,67 @@ def normalizar_texto(texto):
     return re.sub(r'\s+', ' ', texto)
 
 # ==========================================
-# AUTORREPARACIÓN Y VALIDACIÓN DE BASE DE DATOS
+# CARGA AUTOMÁTICA E INTELIGENTE DE PERSONAL.CSV
+# ==========================================
+def sincronizar_personal_csv():
+    """Lee personal.csv detectando automáticamente los nombres de las columnas"""
+    if os.path.exists('personal.csv'):
+        try:
+            # Detectar separador común (coma o punto y coma)
+            df_csv = None
+            for sep in [',', ';', '\t']:
+                try:
+                    temp_df = pd.read_csv('personal.csv', sep=sep)
+                    if len(temp_df.columns) >= 1 and len(temp_df) > 0:
+                        df_csv = temp_df
+                        break
+                except Exception:
+                    continue
+
+            if df_csv is not None and not df_csv.empty:
+                # 1. Identificar columna de nombres
+                col_nombre = None
+                for col in df_csv.columns:
+                    col_upper = str(col).upper()
+                    if any(k in col_upper for k in ['NOMB', 'PERS', 'INTEG', 'TRABAJ', 'EMPLEA', 'APELLID']):
+                        col_nombre = col
+                        break
+                if not col_nombre:
+                    col_nombre = df_csv.columns[0] # Tomar la primera columna si no encuentra coincidencia
+
+                # 2. Identificar columna de cargo
+                col_cargo = None
+                for col in df_csv.columns:
+                    if any(k in str(col).upper() for k in ['CARG', 'PROF', 'FUNCI']):
+                        col_cargo = col
+                        break
+
+                # 3. Identificar columna DNI
+                col_dni = None
+                for col in df_csv.columns:
+                    if any(k in str(col).upper() for k in ['DNI', 'DOC', 'CEDULA']):
+                        col_dni = col
+                        break
+
+                conn = sqlite3.connect('vancan_data.db')
+                c = conn.cursor()
+                for _, row in df_csv.iterrows():
+                    nom = normalizar_texto(row.get(col_nombre, ''))
+                    car = normalizar_texto(row.get(col_cargo, 'TÉCNICO')) if col_cargo else 'TÉCNICO'
+                    dni = str(row.get(col_dni, '')).strip() if col_dni else ''
+                    
+                    if car == "":
+                        car = "TÉCNICO"
+
+                    if nom and len(nom) > 2:
+                        c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom, car, dni))
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            st.error(f"Error leyendo personal.csv: {e}")
+
+# ==========================================
+# INICIALIZACIÓN DE BASE DE DATOS
 # ==========================================
 def init_db():
     conn = sqlite3.connect('vancan_data.db')
@@ -47,7 +107,6 @@ def init_db():
     if 'meta_canes' not in cols_metas:
         c.execute("ALTER TABLE metas ADD COLUMN meta_canes INTEGER DEFAULT 0")
 
-    # Precarga inicial metas si está vacía
     c.execute("SELECT COUNT(*) FROM metas")
     if c.fetchone()[0] == 0:
         c.execute("INSERT OR IGNORE INTO metas (eess, meta_canes) VALUES (?, ?)", ("C.S. CESAR LOPEZ SILVA", 1400))
@@ -64,20 +123,15 @@ def init_db():
     if 'dni' not in cols_personal:
         c.execute("ALTER TABLE personal_db ADD COLUMN dni TEXT DEFAULT ''")
 
-    # Sincronización automática con personal.csv si existe en la carpeta
-    if os.path.exists('personal.csv'):
-        try:
-            df_csv = pd.read_csv('personal.csv')
-            for _, row in df_csv.iterrows():
-                nom = normalizar_texto(row.get('nombre', row.get('NOMBRE', '')))
-                car = normalizar_texto(row.get('cargo', row.get('CARGO', 'TÉCNICO')))
-                dni = str(row.get('dni', row.get('DNI', ''))).strip()
-                if nom:
-                    c.execute("INSERT OR IGNORE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom, car, dni))
-        except Exception:
-            pass
+    conn.commit()
+    conn.close()
 
-    # Precarga por defecto si sigue vacía
+    # Sincronizar desde CSV al iniciar
+    sincronizar_personal_csv()
+
+    # Si sigue vacía, agregar registros por defecto
+    conn = sqlite3.connect('vancan_data.db')
+    c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM personal_db")
     if c.fetchone()[0] == 0:
         personal_inicial = [
@@ -112,7 +166,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# FUNCIONES DE CONSULTA SEGURA
+# FUNCIONES DE CONSULTA
 # ==========================================
 def cargar_avances():
     conn = sqlite3.connect('vancan_data.db')
@@ -128,8 +182,7 @@ def cargar_metas():
     try:
         df = pd.read_sql_query("SELECT * FROM metas", conn)
     except Exception:
-        init_db()
-        df = pd.read_sql_query("SELECT * FROM metas", conn)
+        df = pd.DataFrame()
     conn.close()
 
     for col in ['eess', 'meta_canes']:
@@ -146,8 +199,7 @@ def cargar_personal():
     try:
         df = pd.read_sql_query("SELECT * FROM personal_db", conn)
     except Exception:
-        init_db()
-        df = pd.read_sql_query("SELECT * FROM personal_db", conn)
+        df = pd.DataFrame()
     conn.close()
 
     for col in ['nombre', 'cargo', 'dni']:
@@ -173,13 +225,17 @@ def guardar_avance(fecha, eess, turno, brigada, integ1, integ2, resp, zona, dosi
 def obtener_eess_activos():
     df = cargar_metas()
     if not df.empty and 'eess' in df.columns:
-        return sorted(df['eess'].tolist())
+        lista = [str(x).strip() for x in df['eess'].dropna().unique() if str(x).strip() != ""]
+        if lista:
+            return sorted(lista)
     return ["C.S. CESAR LOPEZ SILVA"]
 
 def obtener_personal_activo():
     df = cargar_personal()
     if not df.empty and 'nombre' in df.columns:
-        return sorted(df['nombre'].tolist())
+        lista = [str(x).strip() for x in df['nombre'].dropna().unique() if str(x).strip() != ""]
+        if lista:
+            return sorted(lista)
     return ["TEC. JORGE CAMPOS"]
 
 LISTA_ZONAS = ["ROBLES", "ROCAS", "ROSALEDA", "ROSARIO", "ROSAS", "SAN BARTOLOME", "SAN JOSE", "SANTA INES"]
@@ -243,7 +299,7 @@ if opcion == "📝 Registrar Avance Diario":
         st.info("No hay registros almacenados.")
 
 # ==========================================
-# MÓDULO 2: DASHBOARD CON REGLA 50/50 POR BRIGADA
+# MÓDULO 2: DASHBOARD (REGLA 50% POR INTEGRANTE)
 # ==========================================
 elif opcion == "📊 Dashboard y Vacunómetro":
     st.header("📊 Dashboard Analítico y Vacunómetro")
@@ -268,7 +324,6 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
     porcentaje = (total_vacunados / meta_total * 100) if meta_total > 0 else 0.0
 
-    # 1. Indicadores Principales
     c1, c2 = st.columns([1, 2])
     with c1:
         st.metric("Total Canes Vacunados", f"{total_vacunados:,}")
@@ -290,11 +345,9 @@ elif opcion == "📊 Dashboard y Vacunómetro":
 
     st.markdown("---")
 
-    # 2. Análisis por Brigada y Distribución al 50% por Personal
     if not df_f.empty:
         col_g1, col_g2 = st.columns(2)
 
-        # A) Dosis totales por Brigada
         with col_g1:
             st.subheader("🚩 Avance por Brigada")
             df_brigada = df_f.groupby('brigada')['dosis'].sum().reset_index().sort_values(by='dosis', ascending=False)
@@ -302,9 +355,8 @@ elif opcion == "📊 Dashboard y Vacunómetro":
             fig_b.update_traces(textposition='outside')
             st.plotly_chart(fig_b, use_container_width=True)
 
-        # B) Producción Individual (Calculado al 50% por Integrante)
         with col_g2:
-            st.subheader("👥 Producción Individual por Personal (50% por Brigada)")
+            st.subheader("👥 Producción Individual (50% por Integrante)")
             
             filas_personal = []
             for _, row in df_f.iterrows():
@@ -325,28 +377,22 @@ elif opcion == "📊 Dashboard y Vacunómetro":
             df_pers_resumen = df_pers_calc.groupby('Personal')['Dosis Atribuidas'].sum().reset_index().sort_values(by='Dosis Atribuidas', ascending=False)
             df_pers_resumen['Dosis Atribuidas'] = df_pers_resumen['Dosis Atribuidas'].round(1)
 
-            fig_p = px.bar(df_pers_resumen, x='Personal', y='Dosis Atribuidas', text='Dosis Atribuidas', title="Dosis por Personal (Divididas al 50% si fueron 2 vacunadores)", color='Dosis Atribuidas', color_continuous_scale='Greens')
+            fig_p = px.bar(df_pers_resumen, x='Personal', y='Dosis Atribuidas', text='Dosis Atribuidas', title="Dosis por Personal (50% asignado a cada integrante)", color='Dosis Atribuidas', color_continuous_scale='Greens')
             fig_p.update_traces(textposition='outside')
             st.plotly_chart(fig_p, use_container_width=True)
-            
-            st.caption("ℹ️ Nota: Si el registro tiene 2 integrantes, la cantidad de dosis avanzadas se divide equitativamente entre ambos (50% para cada uno).")
     else:
-        st.info("No hay avances registrados para mostrar el análisis detallado.")
+        st.info("No hay avances registrados para mostrar gráficos.")
 
 # ==========================================
-# MÓDULO 3: CONFIGURACIÓN
+# MÓDULO 3: CONFIGURACIÓN Y GESTIÓN DE PERSONAL
 # ==========================================
 elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
     st.header("⚙️ Configuración del Sistema")
-    st.caption("Administra dinámicamente los Establecimientos de Salud, Metas de vacunación y Padrón de Personal.")
 
-    tab_eess, tab_personal = st.tabs(["🏥 Establecimientos y Metas", "👥 Padrón de Personal (.CSV / DB)"])
+    tab_eess, tab_personal = st.tabs(["🏥 Establecimientos y Metas", "👥 Padrón de Personal"])
 
-    # -------------------------------------------------------------
-    # TAB 1: GESTIÓN DE ESTABLECIMIENTOS Y METAS
-    # -------------------------------------------------------------
     with tab_eess:
-        st.subheader("➕ 1. Agregar Nuevo Centro de Salud")
+        st.subheader("➕ Agregar Nuevo Centro de Salud")
         with st.form("form_nuevo_eess", clear_on_submit=True):
             col_e1, col_e2 = st.columns(2)
             nuevo_eess_nombre = col_e1.text_input("Nombre del Centro de Salud", placeholder="Ej: C.S. MORON")
@@ -358,123 +404,35 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                 if nombre_norm:
                     conn = sqlite3.connect('vancan_data.db')
                     c = conn.cursor()
-                    try:
-                        c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (nombre_norm, nueva_meta))
-                        conn.commit()
-                        st.success(f"✅ {nombre_norm} registrado correctamente.")
-                    except sqlite3.Error as e:
-                        st.error(f"⚠️ Error al guardar: {e}")
-                    finally:
-                        conn.close()
-                    st.rerun()
-                else:
-                    st.error("⚠️ Ingrese un nombre válido.")
-
-        st.markdown("---")
-        st.subheader("📋 2. Mantenimiento de Establecimientos y Metas")
-
-        df_metas_db = cargar_metas()
-
-        if not df_metas_db.empty:
-            df_metas_edited = st.data_editor(
-                df_metas_db,
-                column_config={
-                    "ID": st.column_config.NumberColumn("N°", disabled=True),
-                    "eess": st.column_config.TextColumn("Centro de Salud / EESS", required=True),
-                    "meta_canes": st.column_config.NumberColumn("Meta Canes", min_value=1, step=10, required=True)
-                },
-                use_container_width=True,
-                hide_index=True,
-                key="editor_eess_key"
-            )
-
-            col_btn_save_e, col_btn_del_e = st.columns([1, 1])
-            
-            with col_btn_save_e:
-                if st.button("💾 Guardar Cambios en EESS", type="primary", use_container_width=True):
-                    conn = sqlite3.connect('vancan_data.db')
-                    c = conn.cursor()
-                    for _, row in df_metas_edited.iterrows():
-                        e_norm = normalizar_texto(row['eess'])
-                        if e_norm:
-                            c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (e_norm, int(row['meta_canes'])))
+                    c.execute("INSERT OR REPLACE INTO metas (eess, meta_canes) VALUES (?, ?)", (nombre_norm, nueva_meta))
                     conn.commit()
                     conn.close()
-                    st.success("✅ Establecimientos y metas actualizados correctamente.")
+                    st.success(f"✅ {nombre_norm} registrado.")
                     st.rerun()
 
-            with col_btn_del_e:
-                with st.expander("🗑️ Eliminar un Centro de Salud"):
-                    eess_borrar = st.selectbox("Seleccione EESS a borrar:", df_metas_db['eess'].tolist(), key="select_del_eess")
-                    if st.button("❌ Confirmar Eliminación de EESS"):
-                        conn = sqlite3.connect('vancan_data.db')
-                        c = conn.cursor()
-                        c.execute("DELETE FROM metas WHERE eess = ?", (eess_borrar,))
-                        conn.commit()
-                        conn.close()
-                        st.success(f"Establecimiento {eess_borrar} eliminado.")
-                        st.rerun()
-        else:
-            st.info("No hay centros de salud registrados.")
+        st.markdown("---")
+        df_metas_db = cargar_metas()
+        if not df_metas_db.empty:
+            st.dataframe(df_metas_db, use_container_width=True)
 
-    # -------------------------------------------------------------
-    # TAB 2: GESTIÓN DE PERSONAL Y CARGA MASIVA DE PERSONAL.CSV
-    # -------------------------------------------------------------
     with tab_personal:
-        st.subheader("📁 1. Carga Masiva desde Archivo `personal.csv`")
-        uploaded_csv = st.file_uploader("Subir o actualizar padrón desde un archivo CSV", type=["csv"])
+        st.subheader("📁 Cargar / Actualizar desde Archivo `personal.csv`")
+        uploaded_csv = st.file_uploader("Subir archivo personal.csv", type=["csv"])
         
         if uploaded_csv is not None:
             try:
-                df_upload = pd.read_csv(uploaded_csv)
-                st.write("Vista previa de los datos cargados:", df_upload.head(3))
-                if st.button("📥 Sincronizar este CSV con la Base de Datos"):
-                    conn = sqlite3.connect('vancan_data.db')
-                    c = conn.cursor()
-                    cargados = 0
-                    for _, row in df_upload.iterrows():
-                        nom = normalizar_texto(row.get('nombre', row.get('NOMBRE', '')))
-                        car = normalizar_texto(row.get('cargo', row.get('CARGO', 'TÉCNICO')))
-                        dni = str(row.get('dni', row.get('DNI', ''))).strip()
-                        if nom:
-                            c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom, car, dni))
-                            cargados += 1
-                    conn.commit()
-                    conn.close()
-                    st.success(f"✅ Se cargaron/actualizaron {cargados} registros correctamente.")
+                df_up = pd.read_csv(uploaded_csv)
+                st.write("Vista previa:", df_up.head(3))
+                if st.button("📥 Importar a Base de Datos"):
+                    df_up.to_csv("personal.csv", index=False)
+                    sincronizar_personal_csv()
+                    st.success("✅ Personal sincronizado exitosamente.")
                     st.rerun()
             except Exception as ex:
-                st.error(f"Error al procesar el archivo CSV: {ex}")
+                st.error(f"Error al procesar archivo: {ex}")
 
         st.markdown("---")
-        st.subheader("➕ 2. Agregar Nuevo Personal Manualmente")
-        with st.form("form_nuevo_personal", clear_on_submit=True):
-            cp1, cp2, cp3 = st.columns(3)
-            p_nombre = cp1.text_input("Nombre y Apellido (Ej: TEC. PEDRO LOPEZ)")
-            p_cargo = cp2.selectbox("Cargo", ["TÉCNICO", "ENFERMERA", "MÉDICO VETERINARIO", "DIGITADOR", "OTRO"])
-            p_dni = cp3.text_input("DNI (Opcional)")
-            btn_add_p = st.form_submit_button("➕ Registrar Personal", type="primary")
-
-            if btn_add_p:
-                p_norm = normalizar_texto(p_nombre)
-                if p_norm:
-                    conn = sqlite3.connect('vancan_data.db')
-                    c = conn.cursor()
-                    try:
-                        c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (p_norm, p_cargo, p_dni.strip()))
-                        conn.commit()
-                        st.success(f"✅ {p_norm} agregado al padrón.")
-                    except sqlite3.Error as e:
-                        st.error(f"⚠️ Error al guardar: {e}")
-                    finally:
-                        conn.close()
-                    st.rerun()
-                else:
-                    st.error("⚠️ Ingrese un nombre válido.")
-
-        st.markdown("---")
-        st.subheader("📋 3. Padrón de Personal Registrado")
-
+        st.subheader("📋 Padrón de Personal Registrado")
         df_personal_db = cargar_personal()
 
         if not df_personal_db.empty:
@@ -491,32 +449,17 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                 key="editor_personal_key"
             )
 
-            col_save_p, col_del_p = st.columns([1, 1])
-
-            with col_save_p:
-                if st.button("💾 Guardar Cambios en Padrón", type="primary", use_container_width=True):
-                    conn = sqlite3.connect('vancan_data.db')
-                    c = conn.cursor()
-                    for _, row in df_personal_edited.iterrows():
-                        nom_norm = normalizar_texto(row['nombre'])
-                        if nom_norm:
-                            c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", 
-                                      (nom_norm, str(row['cargo']), str(row['dni']) if pd.notna(row['dni']) else ""))
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ Padrón de personal actualizado correctamente.")
-                    st.rerun()
-
-            with col_del_p:
-                with st.expander("🗑️ Eliminar un Integrante del Personal"):
-                    pers_borrar = st.selectbox("Seleccione Persona a borrar:", df_personal_db['nombre'].tolist(), key="select_del_personal")
-                    if st.button("❌ Confirmar Eliminación de Persona"):
-                        conn = sqlite3.connect('vancan_data.db')
-                        c = conn.cursor()
-                        c.execute("DELETE FROM personal_db WHERE nombre = ?", (pers_borrar,))
-                        conn.commit()
-                        conn.close()
-                        st.success(f"Trabajador {pers_borrar} eliminado.")
-                        st.rerun()
+            if st.button("💾 Guardar Cambios en Padrón", type="primary"):
+                conn = sqlite3.connect('vancan_data.db')
+                c = conn.cursor()
+                for _, row in df_personal_edited.iterrows():
+                    nom_norm = normalizar_texto(row['nombre'])
+                    if nom_norm:
+                        c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", 
+                                  (nom_norm, str(row['cargo']), str(row['dni']) if pd.notna(row['dni']) else ""))
+                conn.commit()
+                conn.close()
+                st.success("✅ Padrón actualizado correctamente.")
+                st.rerun()
         else:
-            st.info("No hay personal registrado en la base de datos.")
+            st.info("No hay personal registrado.")
