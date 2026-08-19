@@ -2,8 +2,10 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import re
+import os
 from datetime import datetime
 import plotly.graph_objects as go
+import plotly.express as px
 
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -19,7 +21,7 @@ st.set_page_config(
 # ==========================================
 def normalizar_texto(texto):
     """Convierte texto a mayúsculas y limpia acentos para homogeneizar la DB"""
-    if not texto:
+    if not texto or pd.isna(texto):
         return ""
     texto = str(texto).upper().strip()
     replacements = (("Á", "A"), ("É", "E"), ("Í", "I"), ("Ó", "O"), ("Ú", "U"))
@@ -62,7 +64,20 @@ def init_db():
     if 'dni' not in cols_personal:
         c.execute("ALTER TABLE personal_db ADD COLUMN dni TEXT DEFAULT ''")
 
-    # Precarga inicial personal si está vacía
+    # Sincronización automática con personal.csv si existe en la carpeta
+    if os.path.exists('personal.csv'):
+        try:
+            df_csv = pd.read_csv('personal.csv')
+            for _, row in df_csv.iterrows():
+                nom = normalizar_texto(row.get('nombre', row.get('NOMBRE', '')))
+                car = normalizar_texto(row.get('cargo', row.get('CARGO', 'TÉCNICO')))
+                dni = str(row.get('dni', row.get('DNI', ''))).strip()
+                if nom:
+                    c.execute("INSERT OR IGNORE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom, car, dni))
+        except Exception:
+            pass
+
+    # Precarga por defecto si sigue vacía
     c.execute("SELECT COUNT(*) FROM personal_db")
     if c.fetchone()[0] == 0:
         personal_inicial = [
@@ -117,7 +132,6 @@ def cargar_metas():
         df = pd.read_sql_query("SELECT * FROM metas", conn)
     conn.close()
 
-    # Garantizar presencia de columnas en Pandas
     for col in ['eess', 'meta_canes']:
         if col not in df.columns:
             df[col] = "" if col == 'eess' else 0
@@ -136,7 +150,6 @@ def cargar_personal():
         df = pd.read_sql_query("SELECT * FROM personal_db", conn)
     conn.close()
 
-    # Garantizar presencia de columnas en Pandas
     for col in ['nombre', 'cargo', 'dni']:
         if col not in df.columns:
             df[col] = ""
@@ -230,7 +243,7 @@ if opcion == "📝 Registrar Avance Diario":
         st.info("No hay registros almacenados.")
 
 # ==========================================
-# MÓDULO 2: DASHBOARD
+# MÓDULO 2: DASHBOARD CON REGLA 50/50 POR BRIGADA
 # ==========================================
 elif opcion == "📊 Dashboard y Vacunómetro":
     st.header("📊 Dashboard Analítico y Vacunómetro")
@@ -247,13 +260,15 @@ elif opcion == "📊 Dashboard y Vacunómetro":
         meta_total = 0
 
     if not df_avances.empty and eess_sel and 'eess' in df_avances.columns:
-        df_f = df_avances[df_avances['eess'].isin(eess_sel)]
+        df_f = df_avances[df_avances['eess'].isin(eess_sel)].copy()
         total_vacunados = df_f['dosis'].sum()
     else:
+        df_f = pd.DataFrame()
         total_vacunados = 0
 
     porcentaje = (total_vacunados / meta_total * 100) if meta_total > 0 else 0.0
 
+    # 1. Indicadores Principales
     c1, c2 = st.columns([1, 2])
     with c1:
         st.metric("Total Canes Vacunados", f"{total_vacunados:,}")
@@ -270,8 +285,53 @@ elif opcion == "📊 Dashboard y Vacunómetro":
                 'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': meta_total}
             }
         ))
-        fig.update_layout(height=280, margin=dict(l=20, r=20, t=10, b=10))
+        fig.update_layout(height=250, margin=dict(l=20, r=20, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # 2. Análisis por Brigada y Distribución al 50% por Personal
+    if not df_f.empty:
+        col_g1, col_g2 = st.columns(2)
+
+        # A) Dosis totales por Brigada
+        with col_g1:
+            st.subheader("🚩 Avance por Brigada")
+            df_brigada = df_f.groupby('brigada')['dosis'].sum().reset_index().sort_values(by='dosis', ascending=False)
+            fig_b = px.bar(df_brigada, x='brigada', y='dosis', text='dosis', title="Dosis Totales por Brigada", color='dosis', color_continuous_scale='Blues')
+            fig_b.update_traces(textposition='outside')
+            st.plotly_chart(fig_b, use_container_width=True)
+
+        # B) Producción Individual (Calculado al 50% por Integrante)
+        with col_g2:
+            st.subheader("👥 Producción Individual por Personal (50% por Brigada)")
+            
+            filas_personal = []
+            for _, row in df_f.iterrows():
+                dosis = row['dosis']
+                i1 = str(row['integrante_1']).strip()
+                i2 = str(row['integrante_2']).strip()
+                
+                tiene_i2 = i2 != "" and i2 != "-- Ninguno --" and pd.notna(row['integrante_2'])
+
+                if tiene_i2:
+                    dosis_mitad = dosis / 2.0
+                    filas_personal.append({'Personal': i1, 'Dosis Atribuidas': dosis_mitad})
+                    filas_personal.append({'Personal': i2, 'Dosis Atribuidas': dosis_mitad})
+                else:
+                    filas_personal.append({'Personal': i1, 'Dosis Atribuidas': float(dosis)})
+
+            df_pers_calc = pd.DataFrame(filas_personal)
+            df_pers_resumen = df_pers_calc.groupby('Personal')['Dosis Atribuidas'].sum().reset_index().sort_values(by='Dosis Atribuidas', ascending=False)
+            df_pers_resumen['Dosis Atribuidas'] = df_pers_resumen['Dosis Atribuidas'].round(1)
+
+            fig_p = px.bar(df_pers_resumen, x='Personal', y='Dosis Atribuidas', text='Dosis Atribuidas', title="Dosis por Personal (Divididas al 50% si fueron 2 vacunadores)", color='Dosis Atribuidas', color_continuous_scale='Greens')
+            fig_p.update_traces(textposition='outside')
+            st.plotly_chart(fig_p, use_container_width=True)
+            
+            st.caption("ℹ️ Nota: Si el registro tiene 2 integrantes, la cantidad de dosis avanzadas se divide equitativamente entre ambos (50% para cada uno).")
+    else:
+        st.info("No hay avances registrados para mostrar el análisis detallado.")
 
 # ==========================================
 # MÓDULO 3: CONFIGURACIÓN
@@ -280,7 +340,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
     st.header("⚙️ Configuración del Sistema")
     st.caption("Administra dinámicamente los Establecimientos de Salud, Metas de vacunación y Padrón de Personal.")
 
-    tab_eess, tab_personal = st.tabs(["🏥 Establecimientos y Metas", "👥 Padrón de Personal"])
+    tab_eess, tab_personal = st.tabs(["🏥 Establecimientos y Metas", "👥 Padrón de Personal (.CSV / DB)"])
 
     # -------------------------------------------------------------
     # TAB 1: GESTIÓN DE ESTABLECIMIENTOS Y METAS
@@ -312,7 +372,6 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
 
         st.markdown("---")
         st.subheader("📋 2. Mantenimiento de Establecimientos y Metas")
-        st.caption("Edita los valores en la tabla o elimina un registro en la sección inferior.")
 
         df_metas_db = cargar_metas()
 
@@ -359,10 +418,36 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
             st.info("No hay centros de salud registrados.")
 
     # -------------------------------------------------------------
-    # TAB 2: GESTIÓN DE PERSONAL
+    # TAB 2: GESTIÓN DE PERSONAL Y CARGA MASIVA DE PERSONAL.CSV
     # -------------------------------------------------------------
     with tab_personal:
-        st.subheader("➕ 1. Agregar Nuevo Personal")
+        st.subheader("📁 1. Carga Masiva desde Archivo `personal.csv`")
+        uploaded_csv = st.file_uploader("Subir o actualizar padrón desde un archivo CSV", type=["csv"])
+        
+        if uploaded_csv is not None:
+            try:
+                df_upload = pd.read_csv(uploaded_csv)
+                st.write("Vista previa de los datos cargados:", df_upload.head(3))
+                if st.button("📥 Sincronizar este CSV con la Base de Datos"):
+                    conn = sqlite3.connect('vancan_data.db')
+                    c = conn.cursor()
+                    cargados = 0
+                    for _, row in df_upload.iterrows():
+                        nom = normalizar_texto(row.get('nombre', row.get('NOMBRE', '')))
+                        car = normalizar_texto(row.get('cargo', row.get('CARGO', 'TÉCNICO')))
+                        dni = str(row.get('dni', row.get('DNI', ''))).strip()
+                        if nom:
+                            c.execute("INSERT OR REPLACE INTO personal_db (nombre, cargo, dni) VALUES (?, ?, ?)", (nom, car, dni))
+                            cargados += 1
+                    conn.commit()
+                    conn.close()
+                    st.success(f"✅ Se cargaron/actualizaron {cargados} registros correctamente.")
+                    st.rerun()
+            except Exception as ex:
+                st.error(f"Error al procesar el archivo CSV: {ex}")
+
+        st.markdown("---")
+        st.subheader("➕ 2. Agregar Nuevo Personal Manualmente")
         with st.form("form_nuevo_personal", clear_on_submit=True):
             cp1, cp2, cp3 = st.columns(3)
             p_nombre = cp1.text_input("Nombre y Apellido (Ej: TEC. PEDRO LOPEZ)")
@@ -388,8 +473,7 @@ elif opcion == "⚙️ Configuración (EESS, Metas y Personal)":
                     st.error("⚠️ Ingrese un nombre válido.")
 
         st.markdown("---")
-        st.subheader("📋 2. Padrón de Personal Registrado")
-        st.caption("Edita la información en la tabla y guarda los cambios o elimina registros usando la opción desplegable.")
+        st.subheader("📋 3. Padrón de Personal Registrado")
 
         df_personal_db = cargar_personal()
 
